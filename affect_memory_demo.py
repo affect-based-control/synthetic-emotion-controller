@@ -147,7 +147,11 @@ DEFAULT_CONFIG = {
     'harm_intensity': 0.95,
     'curiosity_intensity': 0.3,
     'base_arousal': 0.3,
-    'pain_threshold': -0.5,  # Harm valence below this = "in pain"
+    'pain_threshold': -0.5,
+    
+    # --- Success Evaluation Weights (A7) ---
+    'success_weight_harm': 5.0,
+    'success_weight_curiosity': 1.0,
     
     # --- Affect-to-Hint Mapping (A4, line 10) ---
     'H_aff_explore_curiosity': 1.2,
@@ -171,7 +175,7 @@ DEFAULT_CONFIG = {
     'memory_K': 8,
     'tau_retrieval': 2.0,
     'alpha_tag': 0.1,
-    'store_threshold': 0.5,
+    'store_threshold': 0.4,  # Adjusted for weighted per-channel formula
     
     # --- Movement Dynamics ---
     'heading_smooth': 0.3,
@@ -415,29 +419,37 @@ class Agent:
             self.theta = abs(self.theta)
     
     def compute_success_from_affect(self, z_pre: np.ndarray, z_post: np.ndarray) -> float:
-        """A7: Compute success evaluation from affect change.
+        """A7: Compute success using weighted per-channel hedonic evaluation.
         
-        Success is based on affect (valence), not world coordinates.
-        - Negative: currently experiencing pain
-        - Positive: escaped from pain
-        - Neutral: no pain before or after
+        For each affect channel i, compute normalized success:
+            succ_i = (v*_i m*_i - v_i m_i) / (2 * max(|v*_i m*_i|, |v_i m_i|, ε))
+        
+        Then aggregate via weighted average:
+            succ* = Σ_i w_i succ_i / Σ_i w_i
         """
-        pain_threshold = self.cfg['pain_threshold']
-        harm_pre = z_pre[0]
-        harm_post = z_post[0]
-        
-        was_in_pain = harm_pre < pain_threshold
-        now_in_pain = harm_post < pain_threshold
-        
-        if now_in_pain:
-            # Currently experiencing pain = bad outcome
-            return -0.9
-        elif was_in_pain and not now_in_pain:
-            # Escaped from pain = good outcome
-            return 0.85
-        else:
-            # Neutral (no pain before or after)
-            return 0.1
+        epsilon = 0.01
+    
+        weights = np.array([self.cfg['success_weight_harm'], 
+                            self.cfg['success_weight_curiosity']])
+    
+        v_pre = z_pre[:2]
+        m_pre = np.abs(z_pre[:2])
+        v_post = z_post[:2]
+        m_post = np.abs(z_post[:2])
+    
+        vm_pre = v_pre * m_pre
+        vm_post = v_post * m_post
+    
+        # Per-channel success with factor of 2 for correct bounds
+        succ_per_channel = np.zeros(2)
+        for i in range(2):
+            norm_i = 2 * max(abs(vm_post[i]), abs(vm_pre[i]), epsilon)
+            succ_per_channel[i] = (vm_post[i] - vm_pre[i]) / norm_i
+    
+        # Weighted average
+        succ_star = np.sum(weights * succ_per_channel) / np.sum(weights)
+    
+        return float(np.clip(succ_star, -1.0, 1.0))
     
     def step(self, use_memory: bool) -> Tuple[bool, int, Dict]:
         """Execute one A1-A8 iteration."""
@@ -658,7 +670,7 @@ def plot_comparison(w_mem: World, w_no: World, path: Optional[str] = None) -> No
     ax.plot(cum_mem, 'b-', label='With Memory', lw=2)
     ax.set_xlabel('Step')
     ax.set_ylabel('Cumulative Crossings')
-    ax.set_title('Total Crossings Over Time')
+    ax.set_title('Total Crossings into Harm Over Time')
     ax.legend()
     ax.grid(True, alpha=0.3)
     
@@ -831,7 +843,7 @@ if __name__ == "__main__":
     import sys
     sys.stdout.flush()
     
-    seeds = [42, 123, 456, 789, 101]
+    seeds = [ 456, 516, 637, 789, 101]
     results = run_experiment(cfg, seeds, n_steps=4000)
     print_summary(results)
     
