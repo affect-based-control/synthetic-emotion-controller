@@ -70,6 +70,9 @@ Design Notes:
     - Single-step episodes are intertwined with innate policy-to-action:
       with single-step episodes, an agent can learn WHEN to flee but not
       WHERE fleeing should lead.
+    - The agent only "knows" about harm through affect (negative valence),
+      not through direct access to world coordinates. The y > 0 check
+      occurs only in the sensory interface (assess_affect_from_raw_state).
 
 Expected Results:
     - Early crossings: Similar for both conditions (learning period)
@@ -130,7 +133,7 @@ def softmax(x: np.ndarray, tau: float = 1.0) -> np.ndarray:
 
 DEFAULT_CONFIG = {
     # --- World Parameters ---
-    'num_agents': 30,             # Many agents for sufficient encounters
+    'num_agents': 30,
     'boundary_x': 20.0,
     'boundary_y': 10.0,
     'n_y_bands': 5,
@@ -144,6 +147,7 @@ DEFAULT_CONFIG = {
     'harm_intensity': 0.95,
     'curiosity_intensity': 0.3,
     'base_arousal': 0.3,
+    'pain_threshold': -0.5,  # Harm valence below this = "in pain"
     
     # --- Affect-to-Hint Mapping (A4, line 10) ---
     'H_aff_explore_curiosity': 1.2,
@@ -268,7 +272,12 @@ class EpisodicMemory:
 # ============================================================================
 
 class Agent:
-    """Agent implementing the affect-based control loop (A1-A8)."""
+    """Agent implementing the affect-based control loop (A1-A8).
+    
+    Key design: The agent only "knows" about harm through AFFECT (negative
+    valence), not through direct access to world coordinates. The y > 0 
+    check occurs only in the sensory interface (assess_affect_from_raw_state).
+    """
     
     def __init__(self, x: float, y: float, theta: float, cfg: Dict):
         self.x = x
@@ -276,8 +285,6 @@ class Agent:
         self.theta = theta
         self.cfg = cfg
         self.memory = EpisodicMemory(cfg)
-        self.prev_x = x
-        self.prev_y = y
     
     def get_category(self) -> np.ndarray:
         """A1: Categorize into coarse y-band."""
@@ -292,20 +299,29 @@ class Agent:
         return category
     
     def assess_affect_from_raw_state(self, y_position: float) -> Dict:
-        """A2: Compute affect from raw sensory state."""
-        in_harm = y_position > 0
-        harm_valence = -self.cfg['harm_intensity'] if in_harm else 0.0
+        """A2: Compute affect from raw sensory state.
+        
+        This is the ONLY place where y > 0 is checked directly.
+        The agent experiences harm as negative valence, not as 
+        knowledge of world coordinates.
+        """
+        # Sensory interface: world state -> affect
+        in_harm_zone = y_position > 0
+        harm_valence = -self.cfg['harm_intensity'] if in_harm_zone else 0.0
         curiosity_valence = self.cfg['curiosity_intensity']
         arousal = self.cfg['base_arousal'] + 0.5 * abs(harm_valence)
         arousal = clip(arousal, 0.0, 1.0)
         z = np.array([harm_valence, curiosity_valence, arousal])
+        
+        # Determine if "in pain" based on affect, not coordinates
+        in_pain = harm_valence < self.cfg['pain_threshold']
         
         return {
             'z': z,
             'harm_valence': harm_valence,
             'curiosity_valence': curiosity_valence,
             'arousal': arousal,
-            'in_harm': in_harm
+            'in_pain': in_pain  # Derived from affect, used by agent
         }
     
     def compute_hints_from_needs(self) -> np.ndarray:
@@ -344,9 +360,14 @@ class Agent:
             h = h + effective_alpha_mem * h_mem
         return h
     
-    def select_policy(self, h: np.ndarray, arousal: float, in_harm: bool) -> int:
-        """A4, line 12: Select policy via softmax."""
-        if in_harm and random.random() < self.cfg['reactive_flee_prob']:
+    def select_policy(self, h: np.ndarray, arousal: float, in_pain: bool) -> int:
+        """A4, line 12: Select policy via softmax.
+        
+        Args:
+            in_pain: Based on affect (harm_valence < threshold), not y > 0
+        """
+        # Reactive flee when experiencing pain
+        if in_pain and random.random() < self.cfg['reactive_flee_prob']:
             return 1
         
         tau = self.cfg['tau_base'] - self.cfg['tau_arousal_factor'] * arousal
@@ -373,9 +394,6 @@ class Agent:
     
     def execute_action(self, desired_theta: float, arousal: float) -> None:
         """A6: Execute action."""
-        self.prev_x = self.x
-        self.prev_y = self.y
-        
         smooth = self.cfg['heading_smooth'] + self.cfg['arousal_smooth_boost'] * arousal
         smooth = clip(smooth, 0.1, 0.9)
         
@@ -396,47 +414,75 @@ class Agent:
             self.y = -by + 0.1
             self.theta = abs(self.theta)
     
-    def compute_success(self, was_in_harm: bool) -> float:
-        """A7: Compute success evaluation."""
-        currently_in_harm = self.y > 0
+    def compute_success_from_affect(self, z_pre: np.ndarray, z_post: np.ndarray) -> float:
+        """A7: Compute success evaluation from affect change.
         
-        if currently_in_harm:
+        Success is based on affect (valence), not world coordinates.
+        - Negative: currently experiencing pain
+        - Positive: escaped from pain
+        - Neutral: no pain before or after
+        """
+        pain_threshold = self.cfg['pain_threshold']
+        harm_pre = z_pre[0]
+        harm_post = z_post[0]
+        
+        was_in_pain = harm_pre < pain_threshold
+        now_in_pain = harm_post < pain_threshold
+        
+        if now_in_pain:
+            # Currently experiencing pain = bad outcome
             return -0.9
-        elif was_in_harm and not currently_in_harm:
+        elif was_in_pain and not now_in_pain:
+            # Escaped from pain = good outcome
             return 0.85
         else:
+            # Neutral (no pain before or after)
             return 0.1
     
     def step(self, use_memory: bool) -> Tuple[bool, int, Dict]:
         """Execute one A1-A8 iteration."""
-        was_in_harm = self.y > 0
         
+        # A1: Categorize
         category = self.get_category()
-        affect = self.assess_affect_from_raw_state(self.y)
-        z_need = affect['z']
-        h_need = self.compute_hints_from_needs()
         
+        # A2: Assess affect BEFORE action
+        affect_pre = self.assess_affect_from_raw_state(self.y)
+        z_need = affect_pre['z']
+        h_need = self.compute_hints_from_needs()
+        was_in_pain = affect_pre['in_pain']
+        
+        # A3: Memory retrieval
         if use_memory and len(self.memory) > 0:
             z_mem, h_mem, reliability = self.memory.retrieve(category)
         else:
             z_mem, h_mem, reliability = None, None, 0.0
         
+        # A4: Fuse affect and hints, select policy
         z_fused = self.fuse_affect(z_need, z_mem, reliability)
         h_aff = self.compute_hints_from_affect(z_fused)
         h = self.fuse_hints(h_need, h_mem, h_aff, reliability)
         
         arousal = z_fused[2] if len(z_fused) > 2 else self.cfg['base_arousal']
-        policy = self.select_policy(h, arousal, affect['in_harm'])
+        policy = self.select_policy(h, arousal, affect_pre['in_pain'])
         
+        # A5: Policy instantiation
         desired_theta = self.get_action_for_policy(policy)
+        
+        # A6: Execute
         self.execute_action(desired_theta, arousal)
         
-        crossed_into_harm = (self.y > 0) and not was_in_harm
-        
+        # A7: Reappraise - assess affect AFTER action
         affect_post = self.assess_affect_from_raw_state(self.y)
         z_star = affect_post['z']
-        succ_star = self.compute_success(was_in_harm)
+        now_in_pain = affect_post['in_pain']
         
+        # Crossing = transition from no pain to pain (based on affect)
+        crossed_into_harm = now_in_pain and not was_in_pain
+        
+        # Success from affect change
+        succ_star = self.compute_success_from_affect(z_need, z_star)
+        
+        # A8: Store episode
         if use_memory:
             episode = Episode(
                 c=category.copy(),
@@ -472,7 +518,7 @@ class World:
             'positions': [],
             'crossings': [],
             'policies': [],
-            'mean_episodes': [],  # Renamed: mean episodes per agent
+            'mean_episodes': [],
         }
         self.t = 0
     
@@ -503,7 +549,6 @@ class World:
         self.history['positions'].append([(a.x, a.y) for a in self.agents])
         self.history['crossings'].append(crossings)
         self.history['policies'].append(policies)
-        # Mean episodes per agent
         self.history['mean_episodes'].append(sum(n_episodes) / self.N)
         self.t += 1
     
@@ -570,7 +615,7 @@ def create_animation(world: World, path: str, fps: int = 20, skip: int = 4) -> N
     T = len(world.history['positions'])
     frames = list(range(0, T, skip))
     
-    scatter = ax.scatter([], [], s=60, edgecolors='black', linewidth=0.5)  # Smaller dots for more agents
+    scatter = ax.scatter([], [], s=60, edgecolors='black', linewidth=0.5)
     title = ax.set_title('')
     
     def update(frame_idx):
@@ -774,6 +819,7 @@ if __name__ == "__main__":
     print(f"  World: x ∈ [-{cfg['boundary_x']}, +{cfg['boundary_x']}], "
           f"y ∈ [-{cfg['boundary_y']}, +{cfg['boundary_y']}]")
     print(f"  Harm zone: y > 0 (electric shock)")
+    print(f"  Pain threshold: harm_valence < {cfg['pain_threshold']}")
     print(f"  Y-bands: {cfg['n_y_bands']} (band size: {band_size})")
     print(f"  Boundary band: y ∈ [{-cfg['boundary_y'] + 2*band_size:.1f}, "
           f"{-cfg['boundary_y'] + 3*band_size:.1f}]")
@@ -783,7 +829,7 @@ if __name__ == "__main__":
     print()
 
     import sys
-    sys.stdout.flush()  # show config before running experiments
+    sys.stdout.flush()
     
     seeds = [42, 123, 456, 789, 101]
     results = run_experiment(cfg, seeds, n_steps=4000)
