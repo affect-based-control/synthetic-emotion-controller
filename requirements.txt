@@ -1,0 +1,10 @@
+# Core dependencies for synthetic-emotion-controller
+# Install: pip install -r requirements.txt
+
+numpy>=1.20.0
+matplotlib>=3.5.0
+
+# Note: FFmpeg must be installed separately for MP4 animation export
+# Ubuntu/Debian: sudo apt install ffmpeg
+# macOS: brew install ffmpeg
+# Windows: https://ffmpeg.org/download.html
