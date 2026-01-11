@@ -172,7 +172,7 @@ DEFAULT_CONFIG = {
     
     # --- Episodic Memory (A3, A8) ---
     'memory_max': 100,
-    'memory_K': 8,
+    'memory_K': 1,   # for compliance with Q1 argument, change to e.g. K=8
     'tau_retrieval': 2.0,
     'alpha_tag': 0.1,
     'store_threshold': 0.4,  # Adjusted for weighted per-channel formula
@@ -642,7 +642,7 @@ def create_animation(world: World, path: str, fps: int = 20, skip: int = 4) -> N
             elif y > bb_bottom:
                 colors.append('orange')
             else:
-                colors.append('blue')
+                colors.append('green')
         scatter.set_color(colors)
         
         total = sum(world.history['crossings'][:t + 1])
