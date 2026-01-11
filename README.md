@@ -59,12 +59,15 @@ Demonstrates **episodic affect memory** enabling anticipatory behavior:
 ```
 A1: Observe and categorize → (c, y) from x
 A2: Assess needs → z_need, h_need  
-A3: Retrieve episodic memory → z_mem, h_mem
+A3: Retrieve episodic memory → z_mem, h_mem (K=1 retrieval)
 A4: Fuse affect and hints → z, h, q(π)
 A5: Instantiate policy → action scores
 A6-A7: Execute and reappraise → z*, succ*
 A8: Store episode (only if |succ*| > threshold)
 ```
+
+**Memory depth and E3 compliance:**
+The implementation uses K=1 retrieval, matching the formal Q1 argument in the paper. Despite this, agents typically saturate at memories containing only *two* salient episodes: one encoding negative affect upon entering harm, the other encoding positive affect upon escaping. This shallow memory depth provides strong evidence for E3 (minimal temporal binding) compliance: the architecture achieves genuine anticipatory behavior while storing far too few episodes for meaningful temporal integration or autobiographical binding. What persists in memory are primitive affect tags ("it felt bad there," "it felt good leaving"), not narrative structure.
 
 **Expected results:**
 - Early crossings: Similar for both conditions (learning period)
@@ -78,7 +81,7 @@ A8: Store episode (only if |succ*| > threshold)
 python flock_no_memory.py
 ```
 
-Outputs:
+Outputs (in `outputs/` directory):
 - `flock_trajectories.png` - Agent paths colored by time
 - `flock_snapshots.png` - Flock configuration at key timesteps
 - `flock_metrics.png` - Alignment, cohesion, arousal, policy mix over time
@@ -89,10 +92,10 @@ Outputs:
 python affect_memory_demo.py
 ```
 
-Outputs:
-- `algorithm_comparison.png` - Comparison plots (crossings, memory size, etc.)
-- `no_memory.mp4` - Animation without memory
-- `with_memory.mp4` - Animation with memory
+Outputs (in `outputs/` directory):
+- `harm-algorithm_comparison.png` - Comparison plots (crossings, memory size, etc.)
+- `harm-no_memory.mp4` - Animation without memory
+- `harm-with_memory.mp4` - Animation with memory
 
 ## Configuration
 
@@ -117,7 +120,8 @@ Key parameters:
 |-----------|-------------|---------|
 | `num_agents` | Number of agents | 30 |
 | `n_y_bands` | Categorical bands for memory retrieval | 5 |
-| `store_threshold` | Only store episodes with \|succ*\| > threshold | 0.5 |
+| `memory_K` | Number of episodes retrieved (k-NN) | 1 |
+| `store_threshold` | Only store episodes with \|succ*\| > threshold | 0.4 |
 | `alpha_mem` | Weight for memory-based hints | 0.85 |
 | `alpha_z_mem` | Weight for memory affect fusion | 0.9 |
 | `harm_intensity` | Strength of negative affect in harm zone | 0.95 |
@@ -145,20 +149,22 @@ Episodes are only stored for highly successful or unsuccessful outcomes (|succ*|
 
 Both examples include optional heading persistence (smoothing/inertia) that prefers smooth movement trajectories. This is mechanical (like physical momentum), not memory-based, and does not constitute autobiographical temporal binding.
 
+### k-NN Safety for Any K
+
+While the implementation uses K=1 for simplicity and alignment with the formal Q1 argument, the k-NN formulation in Steps 6-8 of the algorithm remains safe for any K: weighted averaging of affect and hints does not create cross-episode summaries or violate the exclusion criteria E1-E4.
 
 ## Citation
 
 If you use this repository, please cite:
 ```bibtex
 @article{author2026synthetic,
-  title={{Synthetic Emotions and Consciousness: Exploring Architectural Boundaries}},
+  title={{Synthetic {E}motions and {C}onsciousness: {E}xploring {A}rchitectural {B}oundaries}},
   author={name},
-  journal={{journal}},
+  journal={AI \& Society},
   year={2026},
-  publisher={publisher}
+  publisher={Springer}
 }
 ```
-
 
 ## License
 
