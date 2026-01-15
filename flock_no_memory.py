@@ -29,6 +29,32 @@ SOFTWARE.
 Demonstrates spontaneous flock formation from random initial conditions using
 the affect-based control architecture (A1-A8), WITHOUT episodic memory.
 
+IMPORTANT NOTE ON SCOPE:
+    This demonstration does NOT implement the full emotion-like control 
+    architecture as defined in the paper. Specifically, episodic memory 
+    (A3, A7, A8) is entirely disabled. The paper defines emotion-like control
+    as requiring BOTH need-based appraisal AND episodic affective memory
+    working together (dual-source architecture).
+    
+    This demo can be viewed as a test of GRACEFUL DEGRADATION: does the
+    architecture remain functional when memory is temporarily or permanently
+    unavailable? The successful flocking behavior demonstrates that the
+    need-based pathway alone provides useful reactive control, even without
+    the anticipatory guidance that episodic memory would provide.
+    
+    For the complete A1-A8 implementation with memory, see the companion
+    demo: affect_memory_demo.py
+
+SIMPLIFICATIONS IN THIS BASELINE:
+    - Speed is constant (not a control variable). Agents can only adjust
+      heading. This means sub-flocks cannot actively merge by speeding up
+      or slowing down—merging only occurs through boundary reflections or
+      heading convergence. A full implementation might include speed as a
+      second control variable.
+    - τ_2(a) is held constant. The full architecture allows action-selection
+      temperature to vary with arousal.
+    - Episodic memory is disabled (A3, A7, A8 skipped).
+
 Key Insight:
     Heading coherence is treated as a NEED, not just a mechanical rule.
     When an agent's heading differs from neighbors, it experiences discomfort
@@ -36,31 +62,46 @@ Key Insight:
     plausible—social animals experience discomfort when not coordinating
     with the group.
 
-Needs System:
+Needs System (4 needs):
     - Affiliation: Desire to be near others (prevents isolation)
-    - Safety: Desire for personal space (prevents collision)
+    - Safety: Desire for personal space (prevents collision)  
     - Motion: Desire to keep moving (flying birds can't hover)
     - Coherence: Desire to align with neighbors (social coordination)
 
 Policies:
-    - Seek: Move toward neighbors (activated when lonely)
-    - Avoid: Move away from too-close neighbors (activated when crowded)
-    - Align: Match neighbor headings (activated when misaligned)
-    - Explore: Random movement (activated when uncertain)
+    - Seek: Move toward neighbors (activated by high affiliation drive)
+    - Avoid: Move away from neighbors too close (activated by high safety drive)
+    - Align: Match neighbor headings (activated by high coherence drive)
+    - Cruise: Maintain current heading (activated by high motion drive)
 
 Algorithm Mapping to Paper (A1-A8):
-    A1 (Categorize): categorize() → [density, crowding, coherence, motion]
-    A2 (Need Appraisal): NeedSystem.assess() and compute_affect()
-        - Drives: d_i = tanh(α_i × (n_i - n_target_i))
-        - Affect: z_t = [valence, magnitude, arousal, drives]
-    A3 (Episodic Retrieval): Not implemented in this demo (stateless)
-    A4 (Policy Mix): PolicySystem.get_policy_mix()
-        - h_t(π) = α_need × h_need(π) + α_aff × h_aff(π)
-        - q_t(π) = softmax(h_t / τ(arousal))
-    A5 (Policy Instantiation): PolicySystem.score_actions()
+    A1 (Categorize): categorize() → c_t, y_t
+        - c_t = [c_density, c_crowding, c_coherence, c_motion]
+        - y_t = situation parameters for policy instantiation
+    A2 (Need Appraisal): NeedSystem.assess() and compute_affect() → n_t, z_t
+        - Drives (SI convention): d_i = tanh(α_i × (n^◇_i - n_i))
+        - Positive drive = deficit (want more), Negative drive = surplus
+        - Valence (conventional): v_i = -d_i
+        - Positive valence = feeling good, Negative valence = feeling bad
+        - Affect: z_t = [v_t, m_t, a_t, d_t]
+    A3 (Episodic Retrieval): SKIPPED — no memory in this baseline
+        - In full implementation: z^mem_t, h^mem_t ← Retrieve_M(c_t)
+    A4 (Policy Mix): PolicySystem.get_policy_mix() → q_t(π), h_t
+        - h_t(π) = α_need × h^need_t(π) + α_aff × h^aff_t(π)
+        - q_t(π) = softmax(h_t / τ_1(a_t))
+    A5 (Policy Instantiation): PolicySystem.score_actions() → s_t(u)
         - s_t(u) = Σ_π q_t(π) × s̃_π(u)
-    A6 (Action Selection): softmax over action scores
-    A7 (Execute): Update position based on selected heading
+        - Templates s̃_π(u) are innate (depend on y_t, not affect)
+        - All templates return scores in [0, 1]
+        - Select u_t from s_t
+        - NOTE: In this baseline, τ_2(a) is held constant for simplicity.
+          The full architecture allows action-selection temperature to
+          vary with arousal, but here we use a fixed τ_2.
+    A6 (Action Execution): Execute u_t, observe outcome
+    A7 (Post-action Reappraisal): SKIPPED — no memory to update
+        - In full implementation: z*_t, succ*_t ← reappraise(...)
+    A8 (Episode Storage): SKIPPED — no memory in this baseline
+        - In full implementation: e_t ← (c_t, z_t, h_t, z*_t, succ*_t); M ← M ∪ {e_t}
 
 Usage:
     python flock_no_memory.py
@@ -145,11 +186,18 @@ def circular_mean(angles: List[float], weights: Optional[List[float]] = None) ->
 
 @dataclass
 class AgentState:
-    """State of a single flocking agent"""
+    """
+    State of a single flocking agent.
+    
+    NOTE: Speed is constant (not a control variable). Agents can only
+    adjust heading. This simplifies the action space but means sub-flocks
+    cannot actively merge by speeding up or slowing down—merging only
+    occurs through boundary reflections or heading convergence.
+    """
     x: float          # position x
     y: float          # position y  
     theta: float      # heading (radians)
-    speed: float      # current speed
+    speed: float      # current speed (constant, not controlled)
     
     # For visualization
     color_id: int = 0  # agent identifier for coloring
@@ -161,10 +209,16 @@ class AgentState:
 def categorize(agent: AgentState, peers: List[Tuple[float, float, float]], 
                R_comfort: float = 5.0, R_too_close: float = 1.5) -> Dict:
     """
-    A1: Classify the current situation into category vector c_t.
+    A1: Classify the current situation into category vector c_t and parameters y_t.
     
-    This is the "perceptual preprocessor" that maps raw observations
-    to a compact situational description.
+    This is the "perceptual preprocessor" that maps raw observations x_t
+    to a compact situational description (c_t, y_t).
+    
+    Category vector c_t = [c_density, c_crowding, c_coherence, c_motion]:
+        - c_density: How many neighbors within comfortable range [0,1]
+        - c_crowding: Personal space violation level [0,1] (high = too close)
+        - c_coherence: Agent-to-neighbor heading alignment [0,1] (1=aligned, 0=opposite)
+        - c_motion: Current movement level [0,1]
     
     Args:
         agent: Current agent state
@@ -174,14 +228,14 @@ def categorize(agent: AgentState, peers: List[Tuple[float, float, float]],
         
     Returns:
         Dictionary with:
-        - 'c': Category vector [density, crowding, coherence, motion]
-        - 'y': Parameters for policy instantiation
+        - 'c_t': Category vector [c_density, c_crowding, c_coherence, c_motion]
+        - 'y_t': Parameters for policy instantiation
     """
     # Handle empty neighborhood
     if len(peers) == 0:
         return {
-            'c': np.array([0.0, 0.0, 0.5, agent.speed]),
-            'y': {
+            'c_t': np.array([0.0, 0.0, 1.0, agent.speed]),  # c_coherence=1.0 when alone (no misalignment)
+            'y_t': {
                 'mean_neighbor_dir': None,
                 'mean_neighbor_heading': None,
                 'nearest_dir': None,
@@ -199,32 +253,34 @@ def categorize(agent: AgentState, peers: List[Tuple[float, float, float]],
     near_count = sum(1 for r in distances if r < R_comfort)
     c_density = clip(near_count / 5.0, 0, 1)  # 5+ neighbors = fully "affiliated"
     
-    # ---- Category: Crowding (c_too_close) ----
-    # Is anyone violating personal space?
-    # Maps to safety need threat
+    # ---- Category: Crowding (c_crowding) ----
+    # Is anyone too close? (violating personal space)
+    # High value = personal space violated, safety need threatened
     min_dist = min(distances)
     if min_dist < R_too_close:
-        c_too_close = clip(1.0 - min_dist / R_too_close, 0, 1)
+        c_crowding = clip(1.0 - min_dist / R_too_close, 0, 1)
     else:
-        c_too_close = 0.0
+        c_crowding = 0.0
     
     # ---- Category: Heading Coherence (c_coherence) ----
-    # Are nearby neighbors heading the same direction as me?
-    # This is KEY for flocking - creates emotional response to misalignment
+    # How well is MY heading aligned with NEIGHBORS' mean heading?
+    # This measures agent-to-neighbor mismatch, not overall group alignment.
+    # High value = I am aligned with neighbors, Low value = I am misaligned
     nearby_mask = [r < R_comfort * 1.5 for (r, phi, h) in peers]
     nearby_headings = [h for h, m in zip(headings, nearby_mask) if m]
     
     if len(nearby_headings) > 0:
-        # Include my own heading in coherence calculation
-        all_headings = [agent.theta] + nearby_headings
-        _, coherence = circular_mean(all_headings)
-        c_coherence = coherence
+        # Compute mean heading of neighbors (excluding self)
+        mean_neighbor_heading, _ = circular_mean(nearby_headings)
+        # Measure MY alignment with that mean
+        delta = ang_diff(agent.theta, mean_neighbor_heading)
+        c_coherence = (1.0 + math.cos(delta)) / 2.0  # 1 = aligned, 0 = opposite
     else:
-        c_coherence = 0.5  # neutral when alone
+        c_coherence = 1.0  # No nearby neighbors = no misalignment to feel
     
-    # ---- Category: Motion (c_moving) ----
+    # ---- Category: Motion (c_motion) ----
     # Am I currently moving?
-    c_moving = clip(agent.speed, 0, 1)
+    c_motion = clip(agent.speed, 0, 1)
     
     # ---- Parameters for Policy Instantiation (y_t) ----
     # These are situation-specific values used by policy templates
@@ -244,8 +300,8 @@ def categorize(agent: AgentState, peers: List[Tuple[float, float, float]],
     nearest_dir = bearings[nearest_idx]
     
     return {
-        'c': np.array([c_density, c_too_close, c_coherence, c_moving]),
-        'y': {
+        'c_t': np.array([c_density, c_crowding, c_coherence, c_motion]),
+        'y_t': {
             'mean_neighbor_dir': mean_neighbor_dir,
             'mean_neighbor_heading': mean_neighbor_heading,
             'nearest_dir': nearest_dir,
@@ -267,78 +323,103 @@ class NeedSystem:
     3. Motion - desire to keep moving (flying birds can't hover)
     4. Coherence - desire to align with neighbors (social coordination)
     
-    Each need has a target level. Deviation from target creates DRIVES,
+    Each need has a target level n^◇. Deviation from target creates DRIVES,
     which generate AFFECT (valence, magnitude, arousal).
+    
+    Drive convention (SI-compatible):
+        d_i = tanh(α_i × (n^◇_i - n_i))
+        
+        Positive drive = deficit (I want more / current level below target)
+        Negative drive = surplus (I have too much / current level above target)
+    
+    Valence convention (standard psychological):
+        v_i = -d_i
+        
+        Positive valence = feeling good (need satisfied)
+        Negative valence = feeling bad (need unsatisfied)
+    
+    All targets are intuitive: "I want [target] level of [need]"
+        - n_affiliation_target = 0.4 → "I want moderate company"
+        - n_safety_target = 0.9 → "I want HIGH safety (personal space)"
+        - n_motion_target = 0.9 → "I want HIGH movement"
+        - n_coherence_target = 0.85 → "I want HIGH alignment"
     """
     
     def __init__(self, cfg: Dict):
-        # Need targets (desired fulfillment levels)
-        self.targets = np.array([
-            cfg.get('n_affiliation_target', 0.5),   # want moderate density
-            cfg.get('n_safety_target', 0.1),        # want low crowding (high safety)
-            cfg.get('n_motion_target', 0.8),        # want to be moving
-            cfg.get('n_coherence_target', 0.7),     # want alignment with group
+        # Need targets n^◇ (desired levels - all intuitive)
+        self.n_target = np.array([
+            cfg.get('n_affiliation_target', 0.4),   # want moderate density
+            cfg.get('n_safety_target', 0.9),        # want HIGH safety (personal space)
+            cfg.get('n_motion_target', 0.9),        # want HIGH movement
+            cfg.get('n_coherence_target', 0.85),    # want HIGH alignment
         ])
         
-        # Drive sensitivity (how strongly deviation affects drives)
+        # Drive sensitivity α (how strongly deviation affects drives)
         # Higher = more emotional response to need deviation
-        self.alpha = np.array(cfg.get('drive_alpha', [2.5, 3.0, 2.0, 3.0]))
+        self.alpha = np.array(cfg.get('drive_alpha', [2.0, 3.0, 2.5, 4.0]))
         
         # Base arousal (background activation level)
         self.base_arousal = cfg.get('base_arousal', 0.4)
         
-    def assess(self, c: np.ndarray) -> np.ndarray:
+    def assess(self, c_t: np.ndarray) -> np.ndarray:
         """
-        Map category vector to need fulfillment levels.
+        Map category vector c_t to need levels n_t.
         
-        c = [c_density, c_too_close, c_coherence, c_moving]
-        n = [n_affiliation, n_safety, n_motion, n_coherence]
+        c_t = [c_density, c_crowding, c_coherence, c_motion]
+        n_t = [n_affiliation, n_safety, n_motion, n_coherence]
+        
+        Note: n_safety = 1 - c_crowding (high safety when not crowded)
         """
-        n_affiliation = c[0]      # density → affiliation fulfilled
-        n_safety = 1.0 - c[1]     # NOT crowded → safety fulfilled
-        n_motion = c[3]           # moving → motion need fulfilled
-        n_coherence = c[2]        # aligned → coherence fulfilled
+        n_affiliation = c_t[0]        # density → affiliation level
+        n_safety = 1.0 - c_t[1]       # NOT crowded → safety level (inverted)
+        n_motion = c_t[3]             # moving → motion level
+        n_coherence = c_t[2]          # aligned → coherence level
         
         return np.array([n_affiliation, n_safety, n_motion, n_coherence])
     
-    def compute_affect(self, n: np.ndarray) -> Dict:
+    def compute_affect(self, n_t: np.ndarray) -> Dict:
         """
-        Compute affect from need fulfillment.
+        Compute affect from need levels.
         
         This implements:
-            d_i = tanh(α_i × (n_i - n_target_i))
+            d_i = tanh(α_i × (n^◇_i - n_i))   [drives, SI convention]
+            v_i = -d_i                         [valence, standard convention]
             
-        Where d_i is the drive for need i:
-        - Negative drive = need unfulfilled (below target)
-        - Positive drive = need over-fulfilled (above target)
+        Where:
+        - d_i is the drive for need i:
+            Positive drive = deficit (below target) = "I want more"
+            Negative drive = surplus (above target) = "I have too much"
+        - v_i is the valence for need i:
+            Positive valence = feeling good (need satisfied)
+            Negative valence = feeling bad (need unsatisfied)
         
-        Returns affect vector z_t = [valence, magnitude, arousal, drives]
+        Returns affect dictionary with z_t = [v_t, m_t, a_t, d_t]
         """
-        # Drives: signed deviation from target
-        raw_deviation = n - self.targets
-        drives = np.tanh(self.alpha * raw_deviation)
+        # Drives: signed deviation from target (SI convention: target - actual)
+        raw_deviation = self.n_target - n_t
+        d_t = np.tanh(self.alpha * raw_deviation)
         
-        # Valence: emotional tone (positive/negative)
-        # For these needs, valence matches drive sign
-        # (unfulfilled = negative valence = feels bad)
-        valence = drives.copy()
+        # Valence v_t: emotional tone (standard convention)
+        # Positive valence = feeling good (need met, no deficit)
+        # Negative valence = feeling bad (need unmet, deficit present)
+        v_t = -d_t
         
-        # Magnitude: emotional intensity (always positive)
-        magnitude = np.abs(drives)
+        # Magnitude m_t: emotional intensity (always positive)
+        m_t = np.abs(d_t)
         
-        # Arousal: overall activation level
-        # Increases when drives are strong (needs unmet)
-        mean_magnitude = np.mean(magnitude)
-        arousal = clip(self.base_arousal + 0.4 * mean_magnitude, 0, 1)
+        # Arousal a_t: overall activation level
+        # Increases with absolute drive magnitude (distance from target in either direction)
+        mean_magnitude = np.mean(m_t)
+        a_t = clip(self.base_arousal + 0.4 * mean_magnitude, 0, 1)
         
         return {
-            'valence': valence,      # [4] signed
-            'magnitude': magnitude,   # [4] unsigned  
-            'arousal': arousal,       # scalar
-            'drives': drives,         # [4] signed
-            'needs': n,               # [4] fulfillment levels
-            # Full affect vector for storage
-            'z': np.concatenate([valence, magnitude, [arousal], drives])
+            'v_t': v_t,           # [4] signed valence (positive = good, negative = bad)
+            'm_t': m_t,           # [4] unsigned magnitude  
+            'a_t': a_t,           # scalar arousal
+            'd_t': d_t,           # [4] signed drives
+            'n_t': n_t,           # [4] need levels
+            # Full affect vector z_t for storage (SI notation)
+            'z_t': np.concatenate([v_t, m_t, [a_t], d_t])
         }
 
 # ============================================================================
@@ -351,17 +432,42 @@ class PolicySystem:
     A5: Instantiate policies into action scores.
     
     Policies for flocking:
-    - Seek: Move toward neighbors (activated when lonely)
-    - Avoid: Move away from too-close neighbors (activated when crowded)
-    - Align: Match neighbor headings (activated when misaligned)
-    - Explore: Random movement (activated when uncertain)
+    - Seek: Move toward neighbors (activated by high affiliation drive)
+    - Avoid: Move away from neighbors too close (activated by high safety drive)
+    - Align: Match neighbor headings (activated by high coherence drive)
+    - Cruise: Maintain current heading (activated by high motion drive)
     
     Each policy has a TEMPLATE that scores actions based on current situation.
-    The policy MIX q(π) determines how much each template contributes.
+    Templates are INNATE: they depend on situation parameters y_t, not on affect.
+    All templates return scores in [0, 1].
+    
+    The policy MIX q_t(π) determines how much each template contributes.
+    
+    With SI drive convention (positive = deficit = "want more"):
+    - High affiliation drive (lonely) → Seek
+    - High safety drive (crowded) → Avoid  
+    - High coherence drive (misaligned) → Align
+    - High motion drive (not moving enough) → Cruise
+    
+    All H_n entries are POSITIVE for the primary policy-drive mappings.
+    
+    With standard valence convention (positive = good, negative = bad):
+    - Negative affiliation valence (lonely, feels bad) → Seek
+    - Negative safety valence (crowded, feels bad) → Avoid
+    - Negative coherence valence (misaligned, feels bad) → Align
+    - Negative motion valence (stuck, feels bad) → Cruise
+    
+    H_aff entries are NEGATIVE for primary policy-valence mappings
+    (negative valence activates corrective policy).
+    
+    NOTE on τ_2: In this baseline, τ_2(a) is held constant for simplicity.
+    The full architecture allows action-selection temperature to vary with
+    arousal (higher arousal → lower temperature → more decisive actions),
+    but here we use a fixed τ_2 value.
     """
     
     def __init__(self, cfg: Dict):
-        self.policies = ['Seek', 'Avoid', 'Align', 'Explore']
+        self.policies = ['Seek', 'Avoid', 'Align', 'Cruise']
         self.n_policies = len(self.policies)
         
         # Action space: discrete headings
@@ -371,172 +477,223 @@ class PolicySystem:
         # Von Mises concentration for action scoring
         self.kappa = cfg.get('kappa', 5.0)
         
-        # ---- H_n: Need-to-Policy Mapping ----
-        # Maps drives [affil, safety, motion, coherence] to policy hints
-        # Negative weight means: low drive → high policy activation
+        # Spatial parameter for Avoid template
+        self.R_too_close = cfg.get('R_too_close', 2.0)
+        
+        # ---- H_n: Drive-to-Policy Mapping (SI convention) ----
+        # Maps drives d_t = [affiliation, safety, motion, coherence] to policy hints
+        # 
+        # With SI convention: positive drive = deficit = "want more"
+        # Positive H_n entry: high drive → high policy activation
+        #
+        # All primary mappings are positive and intuitive:
+        #   High affiliation drive (lonely) → Seek
+        #   High safety drive (crowded) → Avoid
+        #   High coherence drive (misaligned) → Align
+        #   High motion drive (stuck) → Cruise
         self.H_n = np.array(cfg.get('H_n', [
-            # Seek: activated by LOW affiliation (lonely)
-            [-1.2,  0.0,  0.2, -0.1],
-            # Avoid: activated by LOW safety (too close to others)  
-            [ 0.1, -1.5,  0.0,  0.0],
-            # Align: activated by LOW coherence (heading mismatch)
-            [-0.1,  0.0,  0.1, -1.3],
-            # Explore: mild activation when motion is low
-            [ 0.2,  0.2, -0.3,  0.2],
+            # Columns: [affiliation, safety, motion, coherence]
+            # Seek: HIGH affiliation drive (lonely, want company)
+            [ 1.0,  0.0, -0.3,  0.2],
+            # Avoid: HIGH safety drive (crowded, want space)
+            [ 0.0,  1.5,  0.0,  0.0],
+            # Align: HIGH coherence drive (misaligned, want sync)
+            [ 0.2,  0.0, -0.2,  1.8],
+            # Cruise: HIGH motion drive (stuck, want movement)
+            [-0.1, -0.1,  0.6,  0.0],
         ]))
         
-        # ---- Fusion Weights ----
-        self.alpha_need = cfg.get('alpha_need', 0.65)  # weight for need-based hints
-        self.alpha_aff = cfg.get('alpha_aff', 0.35)    # weight for affect-based hints
+        # ---- H_aff: Affect-to-Policy Mapping (standard valence convention) ----
+        # Maps [v_0, v_1, v_2, v_3, a_t] to policy hints
+        # 
+        # With standard valence: positive = good, negative = bad
+        # NEGATIVE H_aff entries for primary mappings:
+        #   Negative valence (feeling bad) → activate corrective policy
+        #
+        # Example: lonely → negative affiliation valence → 
+        #          negative × negative H_aff entry → positive Seek activation
+        self.H_aff = np.array(cfg.get('H_aff', [
+            # Columns: [v_affil, v_safety, v_motion, v_coherence, arousal]
+            # Seek: NEGATIVE affiliation valence (lonely feels bad) + arousal boost
+            [-0.3,  0.0,  0.0,  0.0,  0.2],
+            # Avoid: NEGATIVE safety valence (crowded feels bad) + strong arousal boost
+            [ 0.0, -0.4,  0.0,  0.0,  0.3],
+            # Align: NEGATIVE coherence valence (misaligned feels bad) + arousal
+            [ 0.0,  0.0,  0.0, -0.5,  0.1],
+            # Cruise: low arousal (cruise when calm)
+            [-0.025, -0.025, -0.025, -0.025, -0.2],
+        ]))
         
-        # ---- Temperature Schedule ----
-        # Maps arousal to decision temperature
+        # ---- Fusion Weights (α_need, α_aff in SI) ----
+        self.alpha_need = cfg.get('alpha_need', 0.70)  # weight for need-based hints
+        self.alpha_aff = cfg.get('alpha_aff', 0.30)    # weight for affect-based hints
+        
+        # ---- Temperature Schedule τ_1(a_t) ----
+        # Maps arousal to policy selection temperature
         # High arousal → low temperature → decisive (sharp distribution)
         # Low arousal → high temperature → exploratory (flat distribution)
-        self.tau_high = cfg.get('tau_high', 0.6)  # temperature at low arousal
-        self.tau_low = cfg.get('tau_low', 0.15)   # temperature at high arousal
+        self.tau_1_high = cfg.get('tau_1_high', 0.4)  # temperature at low arousal
+        self.tau_1_low = cfg.get('tau_1_low', 0.10)   # temperature at high arousal
         
-    def compute_hints_from_needs(self, drives: np.ndarray) -> np.ndarray:
+    def compute_hints_from_needs(self, d_t: np.ndarray) -> np.ndarray:
         """
         Compute policy hints from drives using H_n matrix.
         
-        h_need(π) = [H_n × d]_π
+        h^need_t(π) = [H_n × d_t]_π
+        
+        With SI convention and positive H_n entries:
+        - Positive drive (deficit) → positive hint → policy activated
         """
-        hints = self.H_n @ drives
+        h_need_t = self.H_n @ d_t
         # Normalize to [-1, 1] for consistent scale
-        max_abs = np.abs(hints).max()
+        max_abs = np.abs(h_need_t).max()
         if max_abs > 1e-6:
-            hints = hints / max_abs
-        return hints
+            h_need_t = h_need_t / max_abs
+        return h_need_t
     
     def compute_hints_from_affect(self, affect: Dict) -> np.ndarray:
         """
-        Compute policy hints directly from affect state.
+        Compute policy hints from affect state using H_aff matrix.
         
-        This provides a secondary pathway from emotion to behavior,
-        beyond the structured H_n mapping.
+        h^aff_t(π) = [H_aff × [v_t; a_t]]_π
+        
+        With standard valence convention (positive = good, negative = bad)
+        and negative H_aff entries for primary mappings:
+        - Negative valence × negative H_aff = positive policy activation
+        
+        Example: lonely → v_affil < 0 → (-0.3) × v_affil > 0 → Seek activated
         """
-        v = affect['valence']
-        a = affect['arousal']
+        v_t = affect['v_t']
+        a_t = affect['a_t']
         
-        hints = np.array([
-            # Seek: negative affiliation valence + arousal boost
-            -0.3 * v[0] + 0.2 * a,
-            # Avoid: negative safety valence + strong arousal boost
-            -0.4 * v[1] + 0.3 * a,
-            # Align: negative coherence valence
-            -0.5 * v[3] + 0.1 * a,
-            # Explore: inverse arousal (explore when calm)
-            -0.2 * a + 0.1 * np.mean(v),
-        ])
+        # Construct input vector [v_0, v_1, v_2, v_3, a]
+        aff_input = np.concatenate([v_t, [a_t]])
         
-        max_abs = np.abs(hints).max()
+        h_aff_t = self.H_aff @ aff_input
+        
+        max_abs = np.abs(h_aff_t).max()
         if max_abs > 1e-6:
-            hints = hints / max_abs
-        return hints
+            h_aff_t = h_aff_t / max_abs
+        return h_aff_t
     
     def get_policy_mix(self, affect: Dict) -> Tuple[np.ndarray, np.ndarray]:
         """
-        A4: Fuse hints and compute policy probabilities q(π).
+        A4: Fuse hints and compute policy probabilities q_t(π).
         
-        h(π) = α_need × h_need(π) + α_aff × h_aff(π)
-        q(π) = softmax(h(π) / τ(arousal))
+        h_t(π) = α_need × h^need_t(π) + α_aff × h^aff_t(π)
+        q_t(π) = softmax(h_t(π) / τ_1(a_t))
         
         Returns:
-            q: Policy probabilities [n_policies]
-            h: Fused hints [n_policies] (for logging)
+            q_t: Policy probabilities [n_policies]
+            h_t: Fused hints [n_policies] (for logging)
         """
-        drives = affect['drives']
-        arousal = affect['arousal']
+        d_t = affect['d_t']
+        a_t = affect['a_t']
         
         # Compute hints from both sources
-        h_need = self.compute_hints_from_needs(drives)
-        h_aff = self.compute_hints_from_affect(affect)
+        h_need_t = self.compute_hints_from_needs(d_t)
+        h_aff_t = self.compute_hints_from_affect(affect)
         
-        # Fuse hints (weighted combination)
-        h = self.alpha_need * h_need + self.alpha_aff * h_aff
+        # Fuse hints (weighted combination, SI Eq. 11)
+        h_t = self.alpha_need * h_need_t + self.alpha_aff * h_aff_t
         
-        # Temperature from arousal
-        tau = self.tau_high - (self.tau_high - self.tau_low) * arousal
+        # Policy temperature τ_1(a_t): decreases with arousal
+        tau_1 = self.tau_1_high - (self.tau_1_high - self.tau_1_low) * a_t
         
-        # Convert to probabilities
-        q = softmax(h, tau)
+        # Convert to probabilities (SI Eq. 12)
+        q_t = softmax(h_t, tau_1)
         
-        return q, h
+        return q_t, h_t
     
-    def score_actions(self, q: np.ndarray, y: Dict, agent: AgentState) -> np.ndarray:
+    def score_actions(self, q_t: np.ndarray, y_t: Dict, agent: AgentState) -> np.ndarray:
         """
         A5: Score each action using policy-weighted templates.
         
-        s(u) = Σ_π q(π) × s̃_π(u)
+        s_t(u) = Σ_π q_t(π) × s̃_π(u)
         
         Each policy template s̃_π(u) scores how well action u
         implements policy π in the current situation.
+        
+        Templates are INNATE: they depend on y_t (situation), not affect.
+        All templates return scores in [0, 1].
+        
+        NOTE: In this baseline, τ_2(a) is held constant for simplicity.
+        The full architecture allows action-selection temperature to vary
+        with arousal, but here we use a fixed τ_2 value.
         """
-        scores = np.zeros(self.n_headings)
+        s_t = np.zeros(self.n_headings)
         
         for i, theta in enumerate(self.headings):
-            # Get template scores for this heading
-            s_seek = self._template_seek(theta, y, agent)
-            s_avoid = self._template_avoid(theta, y, agent)
-            s_align = self._template_align(theta, y, agent)
-            s_explore = self._template_explore(theta, agent)
+            # Get template scores s̃_π(u) for this heading
+            s_seek = self._template_seek(theta, y_t, agent)
+            s_avoid = self._template_avoid(theta, y_t, agent)
+            s_align = self._template_align(theta, y_t, agent)
+            s_cruise = self._template_cruise(theta, agent)
             
             # Policy-weighted combination
-            scores[i] = (q[0] * s_seek + 
-                        q[1] * s_avoid + 
-                        q[2] * s_align + 
-                        q[3] * s_explore)
+            s_t[i] = (q_t[0] * s_seek + 
+                      q_t[1] * s_avoid + 
+                      q_t[2] * s_align + 
+                      q_t[3] * s_cruise)
         
-        return scores
+        return s_t
     
     def _von_mises_score(self, theta: float, target: float) -> float:
         """
         Score based on angular proximity to target direction.
         Uses von Mises-like function: high at target, decays with angular distance.
+        Returns score in [0, 1].
         """
         delta = ang_diff(theta, target)
         return math.exp(self.kappa * (math.cos(delta) - 1))
     
-    def _template_seek(self, theta: float, y: Dict, agent: AgentState) -> float:
+    def _template_seek(self, theta: float, y_t: Dict, agent: AgentState) -> float:
         """
-        SEEK template: High score for headings toward neighbors.
+        SEEK template s̃_Seek(u): High score for headings toward neighbors.
         Implements approach/affiliation behavior.
+        Returns score in [0, 1].
         """
-        if y['mean_neighbor_dir'] is None:
+        if y_t['mean_neighbor_dir'] is None:
             return 0.5  # neutral when alone
-        return self._von_mises_score(theta, y['mean_neighbor_dir'])
+        return self._von_mises_score(theta, y_t['mean_neighbor_dir'])
     
-    def _template_avoid(self, theta: float, y: Dict, agent: AgentState) -> float:
+    def _template_avoid(self, theta: float, y_t: Dict, agent: AgentState) -> float:
         """
-        AVOID template: High score for headings away from nearest neighbor.
-        Implements personal space maintenance.
+        AVOID template s̃_Avoid(u): High score for headings away from nearest neighbor.
+        Implements personal space maintenance / safety behavior.
+        
+        This is an INNATE template: it depends on situation parameters y_t,
+        not on affect. The intensity scaling by proximity is part of the
+        innate mapping from situation to action preference.
+        
+        Returns score in [0, 1].
         """
-        if y['nearest_dir'] is None:
+        if y_t['nearest_dir'] is None:
             return 0.5
         # Away = opposite of toward
-        away_dir = wrap_angle(y['nearest_dir'] + math.pi)
-        # Boost when neighbor is very close
-        proximity_boost = clip(2.0 / (y['nearest_dist'] + 0.5), 0.5, 2.0)
-        return self._von_mises_score(theta, away_dir) * proximity_boost
+        away_dir = wrap_angle(y_t['nearest_dir'] + math.pi)
+        # Situation-dependent intensity (innate, based on y_t not affect)
+        # Closer neighbors → higher score, normalized to [0.5, 1.0]
+        proximity_factor = clip(1.0 - y_t['nearest_dist'] / (2 * self.R_too_close), 0.5, 1.0)
+        return self._von_mises_score(theta, away_dir) * proximity_factor
     
-    def _template_align(self, theta: float, y: Dict, agent: AgentState) -> float:
+    def _template_align(self, theta: float, y_t: Dict, agent: AgentState) -> float:
         """
-        ALIGN template: High score for headings matching neighbor consensus.
+        ALIGN template s̃_Align(u): High score for headings matching neighbor consensus.
         This is the KEY template for flocking coordination.
+        Returns score in [0, 1].
         """
-        if y['mean_neighbor_heading'] is None:
+        if y_t['mean_neighbor_heading'] is None:
             return 0.5
-        return self._von_mises_score(theta, y['mean_neighbor_heading'])
+        return self._von_mises_score(theta, y_t['mean_neighbor_heading'])
     
-    def _template_explore(self, theta: float, agent: AgentState) -> float:
+    def _template_cruise(self, theta: float, agent: AgentState) -> float:
         """
-        EXPLORE template: Mild uniform preference with forward bias.
-        Provides baseline behavior when other policies are inactive.
+        CRUISE template s̃_Cruise(u): High score for maintaining current heading.
+        Provides heading persistence / stability when other policies are inactive.
+        Returns score in [0, 1].
         """
-        # Small bonus for continuing current heading (persistence)
-        forward_bonus = 0.3 * self._von_mises_score(theta, agent.theta)
-        return 0.5 + forward_bonus
+        return self._von_mises_score(theta, agent.theta)
 
 # ============================================================================
 # WORLD SIMULATION
@@ -558,8 +715,10 @@ class FlockWorld:
         # Higher = faster turning, Lower = more inertia
         self.heading_smooth = cfg.get('heading_smooth', 0.3)
         
-        # Action selection temperature
-        self.tau_action = cfg.get('tau_action', 0.25)
+        # Action selection temperature τ_2 (constant in this baseline)
+        # NOTE: In the full architecture, τ_2(a) varies with arousal.
+        # Here we use a fixed value for simplicity.
+        self.tau_2 = cfg.get('tau_2', 0.25)
         
         # Initialize agents with random positions and headings
         self._init_agents()
@@ -573,6 +732,7 @@ class FlockWorld:
             'positions': [],    # List of [(x,y) for each agent] per timestep
             'headings': [],     # List of [theta for each agent] per timestep
             'arousal': [],      # Mean arousal per timestep
+            'valence': [],      # Mean valence per timestep
             'alignment': [],    # Flock alignment (order parameter) per timestep
             'nnd': [],          # Mean nearest neighbor distance per timestep
             'policy_mix': [],   # Mean policy probabilities per timestep
@@ -617,41 +777,73 @@ class FlockWorld:
     
     def step(self):
         """
-        Execute one simulation step (A1 through A7 for all agents).
+        Execute one simulation step following A1-A8 structure.
+        
+        Note: A3, A7, A8 are SKIPPED in this no-memory baseline.
+        This tests graceful degradation when episodic memory is unavailable.
         """
         new_headings = []
-        step_data = {'arousal': [], 'policy_mix': []}
+        step_data = {'arousal': [], 'valence': [], 'policy_mix': []}
         
         # ---- Phase 1: All agents compute their decisions ----
         for i in range(self.N):
             agent = self.agents[i]
             peers = self.observe(i)
             
-            # A1: Categorize situation
+            # ============================================================
+            # A1: Categorize situation → c_t, y_t
+            # ============================================================
             cat = categorize(agent, peers,
                            R_comfort=self.cfg.get('R_comfort', 5.0),
                            R_too_close=self.cfg.get('R_too_close', 1.5))
+            c_t = cat['c_t']
+            y_t = cat['y_t']
             
-            # A2: Assess needs and compute affect
-            needs = self.need_system.assess(cat['c'])
-            affect = self.need_system.compute_affect(needs)
-            step_data['arousal'].append(affect['arousal'])
+            # ============================================================
+            # A2: Assess needs and compute affect → n_t, z_t
+            # ============================================================
+            n_t = self.need_system.assess(c_t)
+            affect = self.need_system.compute_affect(n_t)
+            step_data['arousal'].append(affect['a_t'])
+            step_data['valence'].append(np.mean(affect['v_t']))  # mean valence
             
-            # A4: Get policy mix
-            q, hints = self.policy_system.get_policy_mix(affect)
-            step_data['policy_mix'].append(q)
+            # ============================================================
+            # A3: Episodic retrieval — SKIPPED (no memory in this baseline)
+            #
+            # In full implementation this would be:
+            #     z^mem_t, h^mem_t ← Retrieve_M(c_t)
+            #
+            # Without memory, we rely solely on need-based and affect-based
+            # signals. This demonstrates graceful degradation: the system
+            # remains functional but lacks anticipatory guidance from past
+            # episodes.
+            # ============================================================
             
-            # A5: Score actions
-            scores = self.policy_system.score_actions(q, cat['y'], agent)
+            # ============================================================
+            # A4: Get policy mix → q_t(π), h_t
+            # 
+            # Note: Without A3, h_t uses only h^need_t and h^aff_t,
+            # missing the h^mem_t contribution from episodic memory.
+            # ============================================================
+            q_t, h_t = self.policy_system.get_policy_mix(affect)
+            step_data['policy_mix'].append(q_t)
             
-            # A6: Select action
-            probs = softmax(scores, self.tau_action)
+            # ============================================================
+            # A5: Policy instantiation — score actions → s_t(u)
+            #     Then select action u_t
+            #
+            # NOTE: In this baseline, τ_2(a) is held constant for simplicity.
+            # The full architecture allows action-selection temperature to
+            # vary with arousal, but here we use a fixed τ_2 value.
+            # ============================================================
+            s_t = self.policy_system.score_actions(q_t, y_t, agent)
+            probs = softmax(s_t, self.tau_2)
             
             # Mostly argmax, occasional sampling for robustness
             if random.random() < 0.05:
                 action_idx = random.choices(range(len(probs)), weights=probs)[0]
             else:
-                action_idx = np.argmax(scores)
+                action_idx = np.argmax(s_t)
             
             new_headings.append(self.policy_system.headings[action_idx])
         
@@ -662,7 +854,9 @@ class FlockWorld:
             delta = ang_diff(target_heading, agent.theta)
             agent.theta = wrap_angle(agent.theta + self.heading_smooth * delta)
             
-            # A7: Execute - move forward
+            # ============================================================
+            # A6: Action execution — perform action and observe outcome
+            # ============================================================
             agent.x += agent.speed * math.cos(agent.theta) * self.dt
             agent.y += agent.speed * math.sin(agent.theta) * self.dt
             
@@ -673,6 +867,21 @@ class FlockWorld:
             if abs(agent.y) > self.boundary:
                 agent.y = np.sign(agent.y) * (2 * self.boundary - abs(agent.y))
                 agent.theta = wrap_angle(-agent.theta)
+        
+            # ============================================================
+            # A7: Post-action reappraisal — SKIPPED (no memory to update)
+            #
+            # In full implementation this would be:
+            #     z*_t, succ*_t ← reappraise(z_t, x_t, n_t, x*_t, n*_t)
+            # ============================================================
+            
+            # ============================================================
+            # A8: Episode storage — SKIPPED (no memory in this baseline)
+            #
+            # In full implementation this would be:
+            #     e_t ← (c_t, z_t, h_t, z*_t, succ*_t)
+            #     M ← M ∪ {e_t}
+            # ============================================================
         
         # ---- Log metrics ----
         self._log_step(step_data)
@@ -688,6 +897,9 @@ class FlockWorld:
         
         # Mean arousal
         self.history['arousal'].append(np.mean(step_data['arousal']))
+        
+        # Mean valence
+        self.history['valence'].append(np.mean(step_data['valence']))
         
         # Alignment (order parameter): magnitude of mean heading vector
         # 0 = random headings, 1 = perfect alignment
@@ -714,6 +926,7 @@ class FlockWorld:
             if verbose and t % 100 == 0:
                 print(f"Step {t:4d}: alignment={self.history['alignment'][-1]:.2f}, "
                       f"nnd={self.history['nnd'][-1]:.2f}, "
+                      f"valence={self.history['valence'][-1]:.2f}, "
                       f"arousal={self.history['arousal'][-1]:.2f}")
     
     # ========================================================================
@@ -810,7 +1023,7 @@ class FlockWorld:
         for idx in range(len(timesteps), len(axes)):
             axes[idx].set_visible(False)
         
-        plt.suptitle('Flock Snapshots')
+        plt.suptitle('Flock Snapshots (No-Memory Baseline)')
         plt.tight_layout()
         
         if save_path:
@@ -820,7 +1033,7 @@ class FlockWorld:
     
     def plot_metrics(self, save_path: str = None):
         """Plot time series of flock metrics."""
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         T = len(self.history['alignment'])
         
         # Alignment
@@ -842,6 +1055,16 @@ class FlockWorld:
         ax.set_title('Cohesion (Nearest Neighbor Distance)')
         ax.grid(True, alpha=0.3)
         
+        # Valence
+        ax = axes[0, 2]
+        ax.plot(self.history['valence'], 'green', linewidth=1.5)
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5, label='Neutral')
+        ax.set_xlabel('Step')
+        ax.set_ylabel('Mean Valence')
+        ax.set_title('Group Valence (+ = good, − = bad)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
         # Arousal
         ax = axes[1, 0]
         ax.plot(self.history['arousal'], 'purple', linewidth=1.5)
@@ -850,10 +1073,22 @@ class FlockWorld:
         ax.set_title('Group Arousal')
         ax.grid(True, alpha=0.3)
         
-        # Policy mix over time
+        # Valence vs Arousal scatter
         ax = axes[1, 1]
+        colors = np.linspace(0, 1, T)
+        sc = ax.scatter(self.history['valence'], self.history['arousal'], 
+                       c=colors, cmap='viridis', alpha=0.5, s=10)
+        ax.set_xlabel('Valence (+ = good)')
+        ax.set_ylabel('Arousal')
+        ax.set_title('Affect Space Trajectory')
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+        plt.colorbar(sc, ax=ax, label='Time')
+        ax.grid(True, alpha=0.3)
+        
+        # Policy mix over time
+        ax = axes[1, 2]
         policy_mix = np.array(self.history['policy_mix'])
-        labels = ['Seek', 'Avoid', 'Align', 'Explore']
+        labels = ['Seek', 'Avoid', 'Align', 'Cruise']
         colors = ['green', 'red', 'blue', 'gray']
         for i, (label, color) in enumerate(zip(labels, colors)):
             ax.plot(policy_mix[:, i], color=color, label=label, linewidth=1.5, alpha=0.8)
@@ -863,6 +1098,7 @@ class FlockWorld:
         ax.legend()
         ax.grid(True, alpha=0.3)
         
+        plt.suptitle('Flock Metrics (No-Memory Baseline - Graceful Degradation Test)')
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=150)
@@ -917,6 +1153,7 @@ class FlockWorld:
             quiver.set_UVC(us, vs)
             
             title.set_text(f't={t}  alignment={self.history["alignment"][t]:.2f}  '
+                          f'valence={self.history["valence"][t]:.2f}  '
                           f'nnd={self.history["nnd"][t]:.1f}')
             return quiver, title
         
@@ -938,6 +1175,10 @@ if __name__ == "__main__":
         # Population
         'num_agents': 25,
         'dt': 0.15,
+        # NOTE: Speed is constant (not a control variable). Agents can only
+        # adjust heading. This means sub-flocks cannot actively merge by
+        # speeding up or slowing down—merging only occurs through boundary
+        # reflections or heading convergence.
         'speed': 0.85,
         'boundary': 40.0,
         
@@ -945,35 +1186,49 @@ if __name__ == "__main__":
         'R_comfort': 7.0,       # comfortable neighbor distance
         'R_too_close': 2.0,     # personal space radius
         
-        # Need targets - key for behavior!
-        'n_affiliation_target': 0.4,   # want moderate density
-        'n_safety_target': 0.1,        # want low crowding
-        'n_motion_target': 0.9,        # MUST keep moving
-        'n_coherence_target': 0.85,    # STRONG desire for alignment
+        # Need targets n^◇ — all intuitive: "I want [target] level of [need]"
+        'n_affiliation_target': 0.4,   # want MODERATE density (not too isolated)
+        'n_safety_target': 0.9,        # want HIGH safety (personal space respected)
+        'n_motion_target': 0.9,        # want HIGH motion (keep moving)
+        'n_coherence_target': 0.85,    # want HIGH coherence (aligned with group)
         
-        # Drive sensitivity [affiliation, safety, motion, coherence]
-        # Higher coherence sensitivity = stronger alignment drive
+        # Drive sensitivity α = [affiliation, safety, motion, coherence]
+        # Higher = more emotional response to deviation from target
         'drive_alpha': [2.0, 3.0, 2.5, 4.0],  # coherence most sensitive
         'base_arousal': 0.4,
         
         # Policy system
         'n_headings': 36,
         'kappa': 6.0,
-        'alpha_need': 0.70,  # more weight on structured need mapping
-        'alpha_aff': 0.30,
-        'tau_high': 0.4,     # lower = more decisive even at low arousal
-        'tau_low': 0.10,
+        'alpha_need': 0.70,    # weight for need-based hints h^need_t
+        'alpha_aff': 0.30,     # weight for affect-based hints h^aff_t
+        'tau_1_high': 0.4,     # policy temperature τ_1 at low arousal
+        'tau_1_low': 0.10,     # policy temperature τ_1 at high arousal
         
         # Movement dynamics
         'heading_smooth': 0.20,  # Lower = more inertia, smoother turning
-        'tau_action': 0.15,      # Lower = more decisive action selection
+        # NOTE: τ_2 is held constant in this baseline. The full architecture
+        # allows τ_2(a) to vary with arousal.
+        'tau_2': 0.15,           # action selection temperature τ_2 (constant)
         
-        # Need-to-policy mapping H_n - TUNED for flocking
+        # Drive-to-policy mapping H_n (SI convention: positive drive = deficit)
+        # All primary mappings are POSITIVE: high drive → policy activated
         'H_n': [
-            [-1.0,  0.0,  0.3, -0.2],  # Seek ← lonely
-            [ 0.0, -1.5,  0.0,  0.0],  # Avoid ← crowded (unchanged)
-            [-0.2,  0.0,  0.2, -1.8],  # Align ← misaligned (STRONG!)
-            [ 0.1,  0.1, -0.6,  0.0],  # Explore ← only when motion low, NOT from coherence
+            # Columns: [affiliation, safety, motion, coherence]
+            [ 1.0,  0.0, -0.3,  0.2],  # Seek ← high affiliation drive (lonely)
+            [ 0.0,  1.5,  0.0,  0.0],  # Avoid ← high safety drive (crowded)
+            [ 0.2,  0.0, -0.2,  1.8],  # Align ← high coherence drive (misaligned)
+            [-0.1, -0.1,  0.6,  0.0],  # Cruise ← high motion drive (stuck)
+        ],
+        
+        # Affect-to-policy mapping H_aff (standard valence: positive = good)
+        # Primary mappings are NEGATIVE: negative valence (bad) → policy activated
+        'H_aff': [
+            # Columns: [v_affil, v_safety, v_motion, v_coherence, arousal]
+            [-0.3,  0.0,  0.0,  0.0,  0.2],   # Seek ← negative affil valence (lonely feels bad)
+            [ 0.0, -0.4,  0.0,  0.0,  0.3],   # Avoid ← negative safety valence (crowded feels bad)
+            [ 0.0,  0.0,  0.0, -0.5,  0.1],   # Align ← negative coherence valence (misaligned feels bad)
+            [-0.025, -0.025, -0.025, -0.025, -0.2],  # Cruise ← general negative valence, low arousal
         ],
     }
     
@@ -982,21 +1237,43 @@ if __name__ == "__main__":
     random.seed(seed)
     np.random.seed(seed)
     
-    print("=" * 60)
-    print("EMOTION-BASED FLOCKING")
-    print("Spontaneous flock formation from random initial conditions")
-    print("=" * 60)
-    print(f"\nConfiguration:")
+    print("=" * 70)
+    print("EMOTION-BASED FLOCKING (No-Memory Baseline)")
+    print("=" * 70)
+    print()
+    print("NOTE: This demo tests GRACEFUL DEGRADATION of the emotion-like")
+    print("      control architecture. Episodic memory (A3, A7, A8) is disabled.")
+    print("      Full emotion-like control requires dual-source integration")
+    print("      (needs + memory). See affect_memory_demo.py for full A1-A8.")
+    print()
+    print("SIMPLIFICATIONS IN THIS BASELINE:")
+    print("  - Speed is constant (heading is the only control variable)")
+    print("  - τ_2(a) is held constant (not arousal-dependent)")
+    print("  - Episodic memory disabled (A3, A7, A8 skipped)")
+    print()
+    print("Valence Convention (standard psychological):")
+    print("  v_i = -d_i")
+    print("  Positive valence = feeling good (need satisfied)")
+    print("  Negative valence = feeling bad (need unsatisfied)")
+    print()
+    print("Configuration:")
     print(f"  Agents: {cfg['num_agents']}")
-    print(f"  Need targets: affil={cfg['n_affiliation_target']}, "
-          f"safety={cfg['n_safety_target']}, motion={cfg['n_motion_target']}, "
-          f"coherence={cfg['n_coherence_target']}")
-    print(f"  Heading smoothing (inertia): {cfg['heading_smooth']}")
+    print(f"  Speed: {cfg['speed']} (constant, not controlled)")
+    print(f"  Need targets n^◇:")
+    print(f"    affiliation = {cfg['n_affiliation_target']} (want moderate company)")
+    print(f"    safety      = {cfg['n_safety_target']} (want HIGH personal space)")
+    print(f"    motion      = {cfg['n_motion_target']} (want HIGH movement)")
+    print(f"    coherence   = {cfg['n_coherence_target']} (want HIGH alignment)")
+    print(f"  Drive sensitivity α: {cfg['drive_alpha']}")
+    print(f"  Drive convention: d_i = tanh(α_i × (n^◇_i - n_i)) [SI]")
+    print(f"    Positive drive = deficit (want more)")
+    print(f"    Negative drive = surplus (have too much)")
+    print(f"  Action temperature: τ_2 = {cfg['tau_2']} (constant in this baseline)")
     print()
     
     # Create and run simulation
     world = FlockWorld(cfg)
-    world.run(1000, verbose=True)
+    world.run(2000, verbose=True)
     
     # Generate visualizations
     print("\nGenerating visualizations...")
@@ -1005,10 +1282,13 @@ if __name__ == "__main__":
     os.makedirs('outputs', exist_ok=True)
     
     world.plot_trajectories_by_time('outputs/flock_trajectories.png')
-    world.plot_snapshots([0, 100, 300, 500, 700, 900], 'outputs/flock_snapshots.png')
+    world.plot_snapshots([0, 400, 800, 1200, 1600, 1900], 'outputs/flock_snapshots.png')
     world.plot_metrics('outputs/flock_metrics.png')
     
-    # Create animation
-    world.create_animation('outputs/flock_animation.mp4', fps=30, skip=2)
+    # Create animation (comment out if ffmpeg not available)
+    try:
+        world.create_animation('outputs/flock_animation.mp4', fps=30, skip=2)
+    except Exception as e:
+        print(f"Animation skipped (ffmpeg may not be available): {e}")
     
     print("\nDone!")
