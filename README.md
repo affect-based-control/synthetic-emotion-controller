@@ -22,27 +22,43 @@ The architecture implements a hierarchical control loop (A1-A8) where:
 
 ### Example 1: Social Flocking (`flock_no_memory.py`)
 
-Demonstrates the basic emotion architecture **without episodic memory**:
+Demonstrates **a reduced** emotion architecture **without episodic memory**.
+It proves **graceful degradation** under memory failure.
 
 - Agents navigate a 2D world with social needs (affiliation, safety, motion, coherence)
 - Emotional signals (valence, arousal, drives) emerge from need satisfaction/frustration
-- Policies include Seek, Avoid, Align, and Explore
+- Policies include Seek, Avoid, Align, and Cruise
 - Agents exhibit **emergent flocking behavior** driven purely by affect
 
 **Key insight for flocking:**
 Heading coherence is treated as a *need*, not just a mechanical rule. When an agent's heading differs from neighbors, it experiences discomfort ("out of sync"), which drives the Align policy. This is biologically plausible—social animals experience discomfort when not coordinating with the group.
 
+**Conventions:**
+- **Drives** follow the convention: $d_i = \tanh(\alpha_i \times (n^\diamond_i - n_i))$, where positive drive indicates deficit ("want more") and negative drive indicates surplus
+- **Valence** follows standard psychological convention: $v_i = -d_i$, where positive valence means feeling good (need satisfied) and negative valence means feeling bad
+- **Arousal** increases with absolute drive magnitude (distance from target in either direction)
+
+**Simplifications in this baseline:**
+- Speed is constant (heading is the only control variable)
+- Action-selection temperature $\tau_2(a) \equiv \text{const}$ (not arousal-dependent)
+- Episodic memory is disabled (A3, A7, A8 skipped)
+
+**Affective attractor:**
+When the flock reaches stable coordinated motion, the affect-space trajectory (valence vs. arousal) converges to a one-dimensional curve. This occurs because flock geometry cannot simultaneously satisfy all need targets perfectly—agents in a tight flock experience mild affiliation surplus, creating residual drive variation. This "affective attractor" represents the characteristic emotional signature of stable flocking: mild positive valence, moderate arousal.
+
 **Algorithm mapping:**
 - A1 (Categorize): `categorize()` → density, crowding, coherence, motion
 - A2 (Need Appraisal): `NeedSystem.assess()` and `compute_affect()`
-- A3 (Episodic Retrieval): Not implemented (stateless demo)
+- A3 (Episodic Retrieval): Skipped (graceful degradation test)
 - A4 (Policy Mix): `PolicySystem.get_policy_mix()`
 - A5 (Action Scoring): `PolicySystem.score_actions()`
-- A6-A7 (Execute): Position and heading updates
+- A6 (Execute): Position and heading updates
+- A7 (Reappraisal): Skipped (graceful degradation test)
+- A8 (Store episode): Skipped (graceful degradation test)
 
 ### Example 2: Anticipatory Harm Avoidance (`affect_memory_demo.py`)
 
-Demonstrates **episodic affect memory** enabling anticipatory behavior:
+Demonstrates **the complete** emotion architecture **with episodic memory** (a genuine **separation witness for Q1**)
 
 - Agents explore a 2D world with a harm zone (y > 0) that delivers "electric shock"
 - Shock causes strong negative affect, but only upon contact (no warning signal)
@@ -66,8 +82,8 @@ A6-A7: Execute and reappraise → z*, succ*
 A8: Store episode (only if |succ*| > threshold)
 ```
 
-**Memory depth and E3 compliance:**
-The implementation uses K=1 retrieval, matching the formal Q1 argument in the paper. Despite this, agents typically saturate at memories containing only *two* salient episodes: one encoding negative affect upon entering harm, the other encoding positive affect upon escaping. This shallow memory depth provides strong evidence for E3 (minimal temporal binding) compliance: the architecture achieves genuine anticipatory behavior while storing far too few episodes for meaningful temporal integration or autobiographical binding. What persists in memory are primitive affect tags ("it felt bad there," "it felt good leaving"), not narrative structure.
+**Memory depth and R3 compliance:**
+Agents typically saturate at memories containing only *two* salient episodes: one encoding negative affect upon entering harm, the other encoding positive affect upon escaping. This shallow memory depth provides strong evidence for R3 (no autobiographical consolidation) compliance: the architecture achieves genuine anticipatory behavior while storing far too few episodes for meaningful temporal integration or autobiographical binding. What persists in memory are primitive affect tags for separate episodes  ("it felt bad there," "it felt good leaving"), not narrative structure.
 
 **Expected results:**
 - Early crossings: Similar for both conditions (learning period)
@@ -84,7 +100,7 @@ python flock_no_memory.py
 Outputs (in `outputs/` directory):
 - `flock_trajectories.png` - Agent paths colored by time
 - `flock_snapshots.png` - Flock configuration at key timesteps
-- `flock_metrics.png` - Alignment, cohesion, arousal, policy mix over time
+- `flock_metrics.png` - Alignment, cohesion, valence, arousal, affect trajectory, policy mix
 - `flock_animation.mp4` - Animation of flock formation
 
 ### Example 2: Affect Memory Demo
@@ -106,9 +122,14 @@ Key parameters in `cfg` dictionary:
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `num_agents` | Number of flocking agents | 25 |
+| `speed` | Agent speed (constant, not controlled) | 0.85 |
+| `n_affiliation_target` | Desired density level | 0.4 |
+| `n_safety_target` | Desired personal space level | 0.9 |
+| `n_motion_target` | Desired movement level | 0.9 |
 | `n_coherence_target` | Desired alignment level (higher = stronger flocking) | 0.85 |
 | `drive_alpha` | Sensitivity of drives to need deviation | [2.0, 3.0, 2.5, 4.0] |
 | `heading_smooth` | Turning inertia (lower = smoother) | 0.20 |
+| `tau_2` | Action selection temperature (constant) | 0.15 |
 | `R_comfort` | Comfortable neighbor distance | 7.0 |
 | `R_too_close` | Personal space radius | 2.0 |
 
@@ -128,6 +149,10 @@ Key parameters:
 
 ## Design Notes
 
+### Flocking: Graceful Degradation
+
+The flocking example demonstrates that the architecture remains functional when episodic memory is unavailable. This is a test of *graceful degradation*, not full emotion-like control. The paper's architectural definition (A1-A8) requires dual-source integration: both need-based appraisal *and* episodic affective memory working together.
+
 ### Policy-to-Action Mappings
 
 The present algorithm learns *when* to activate policies (anticipatory triggering) but not *how* to execute them. Policy-to-action mappings are assumed innate. For example:
@@ -141,17 +166,21 @@ Learning effective policy-to-action mappings would require extended temporal win
 
 Episodes are kept to the minimum temporal size of a single step. This choice is intertwined with the innate policy-to-action assumption: with single-step episodes, an agent can learn *when* to activate a flee policy, but not *where* fleeing should lead. The latter would require persistence across multiple steps plus subsequent credit assignment.
 
-### Selective Episode Storage
+### Separation Witness: Selective Episode Storage
 
 Episodes are only stored for highly successful or unsuccessful outcomes (|succ*| > threshold). This prevents memory from being swamped by neutral episodes that would dilute the signal from significant experiences.
 
-### Heading Persistence
+### Flocking: Coherence Measurement
+
+The coherence category measures agent-to-neighbor heading mismatch directly: $c_{\text{coherence}} = (1 + \cos\Delta)/2$ where $\Delta$ is the angular difference between the agent's heading and the mean neighbor heading. This ensures that an agent pointing the "wrong way" relative to its neighbors feels appropriately "out of sync," even if the neighbors themselves are well-aligned.
+
+### Flocking: Heading Persistence
 
 Both examples include optional heading persistence (smoothing/inertia) that prefers smooth movement trajectories. This is mechanical (like physical momentum), not memory-based, and does not constitute autobiographical temporal binding.
 
-### k-NN Safety for Any K
+### Separation Witness: k-NN Safety for Any K
 
-While the implementation uses K=1 for simplicity and alignment with the formal Q1 argument, the k-NN formulation in Steps 6-8 of the algorithm remains safe for any K: weighted averaging of affect and hints does not create cross-episode summaries or violate the exclusion criteria E1-E4.
+While the implementation uses K=1 to ensure full compliance with the Q1 argument of the main text, the k-NN formulation in Steps 6-8 of the algorithm would remain R1-R4 compliant for any K even if performed inside the controller: weighted averaging of affect and hints of similar episodes (with $\mathbf{c}_i \approx \mathbf{c}_j$) does not create cross-episode summaries.
 
 ## Citation
 
