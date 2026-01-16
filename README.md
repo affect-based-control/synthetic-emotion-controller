@@ -211,9 +211,9 @@ If you use this repository, please cite:
 @article{author2026synthetic,
   title={{Synthetic Emotions and Consciousness: Exploring Architectural Boundaries}},
   author={name},
-  journal={AI \& Society},
+  journal={},
   year={2026},
-  publisher={Springer}
+  publisher={}
 }
 ```
 
