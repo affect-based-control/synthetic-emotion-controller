@@ -54,10 +54,10 @@ A8: Store episode (only if |succ*| ≥ threshold)
 ```
 
 **Normalization strategy:**
-- H_need and H_affect matrices are row-L1 normalized so hints remain bounded in [-1, 1]
-- Hint fusion weights are renormalized to sum to 1 at each step
-- Memory retrieval uses `h_mem = Σ w_j * succ_j * h_j` (success magnitude scales hint strength linearly)
-- Success is computed from need-based affect (z^need, z*^need)
+- **H matrices**: H_need and H_affect are row-L1 normalized at initialization, ensuring hints `h = H @ x` remain bounded in [-1, 1] when inputs are in [-1, 1]
+- **Hint fusion**: Weights (α_need, α_mem, α_aff) are always normalized to sum to 1, keeping fused hints bounded
+- **Memory retrieval**: Uses `h_mem = Σ w_j * succ_j * h_j` where `w_j = softmax(τ × sim_j)`. No denominator normalization—success magnitude scales hint strength linearly
+- **Success computation**: Computed from need-based affect (z^need, z*^need), not fused affect, preventing "fear relief" artifacts
 
 **Credit assignment:**
 One-hot policy tagging isolates credit to the responsible policy. The "responsible policy" is identified as π_hat = argmax_π [q(π) * s̃_π(u_t)], and only that policy's one-hot tag is stored.
@@ -66,12 +66,13 @@ One-hot policy tagging isolates credit to the responsible policy. The "responsib
 ```
 c_t = [y_band one-hot, sign(v_y) one-hot, harm_flag one-hot]
 ```
-This expanded representation reduces spurious cosine-similarity ties that would otherwise make K=1 retrieval unreliable.
+This expanded representation reduces spurious cosine-similarity ties.
+
 
 **Expected results:**
 - Early crossings: Similar for both conditions (learning period)
 - Late crossings: ~0 with memory vs. continued crossings without memory
-- Late crossing reduction: 80-100%
+- Late crossing reduction: ~80%
 
 ---
 
@@ -100,7 +101,7 @@ Heading coherence is treated as a *need*, not just a mechanical rule. When an ag
 - Episodic memory is disabled (A3, A7, A8 skipped)
 
 **Affective attractor:**
-When the flock reaches stable coordinated motion, the affect-space trajectory (valence vs. arousal) converges to a one-dimensional curve. This "affective attractor" represents the characteristic emotional signature of stable flocking: mild positive valence, moderate arousal.
+When the flock reaches stable coordinated motion, the affect-space trajectory (valence vs. arousal) converges to a region on a one-dimensional curve. This "affective attractor" represents the characteristic emotional signature of stable flocking: mild positive valence, moderate arousal.
 
 **Algorithm mapping:**
 - A1 (Categorize): `categorize()` → density, crowding, coherence, motion
@@ -147,10 +148,11 @@ Key parameters in `DEFAULT_CONFIG` dictionary:
 | `num_y_bands` | Categorical bands for memory retrieval | 6 |
 | `memory_retrieval_k` | Number of episodes retrieved (k-NN) | 1 |
 | `memory_store_threshold` | Only store episodes with \|succ*\| ≥ threshold | 0.25 |
-| `alpha_hint_need` | Weight for need-based hints | 0.30 |
-| `alpha_hint_memory` | Weight for memory-based hints | 0.60 |
-| `alpha_hint_affect` | Weight for affect-based hints | 0.40 |
-| `beta_affect_fusion` | Base weight for need affect in fusion | 0.40 |
+| `alpha_hint_need` | Base weight for need-based hints | 0.30 |
+| `alpha_hint_memory` | Base weight for memory-based hints | 0.50 |
+| `alpha_hint_affect` | Base weight for affect-based hints | 0.20 |
+| `beta_affect_fusion` | Base weight for need affect in z fusion | 0.50 |
+| `use_reliability_weighting` | Scale memory weight by retrieval similarity | False |
 | `success_mode` | Success measure: "drive", "emotion", or "hybrid" | "hybrid" |
 | `success_omega` | Blend factor for hybrid success | 0.50 |
 | `success_weight_safety` | Weight for safety channel in hedonic success | 4.0 |
@@ -187,6 +189,16 @@ The `affect_memory_demo.py` implements the complete emotion-like control loop as
 ### Graceful Degradation: Reduced Architecture
 
 The `flock_no_memory.py` demonstrates that the need-based pathway alone provides useful reactive control when episodic memory is unavailable. This robustness property may be valuable in deployments where memory systems could fail.
+
+### Reliability Weighting: Design Choice
+
+The `use_reliability_weighting` flag controls whether retrieval similarity affects fusion weights:
+
+- **False (default)**: Similarity is used ONLY in retrieval via `w_j = softmax(τ × sim_j)`. Fusion uses fixed weights. 
+
+- **True**: Similarity affects BOTH retrieval weights AND fusion weights (α_mem scaled by reliability before normalization). This may over-attenuate memory contribution.
+
+The default setting (False) lets the retrieval weights `w_j` handle similarity, and uses fixed fusion weights (when no good matches exist, `w_j` becomes diffuse and `h_mem` becomes diffuse).
 
 ### Policy-to-Action Mappings
 
