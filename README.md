@@ -4,7 +4,7 @@ Implementation of an affect-based control architecture for autonomous agents, as
 
 > **Synthetic Emotions and Consciousness: Exploring Architectural Boundaries**
 
-This repository demonstrates how emotion-like mechanisms can guide adaptive behavior, with examples showing both reactive affect-based control and episodic affect memory for anticipatory decision-making.
+This repository demonstrates how emotion-like mechanisms can guide adaptive behavior, with examples showing both the complete emotion-like control architecture (A1-A8) and graceful degradation under memory failure.
 
 ## Overview
 
@@ -20,31 +20,87 @@ The architecture implements a hierarchical control loop (A1-A8) where:
 
 ## Example Implementations
 
-### Example 1: Social Flocking (`flock_no_memory.py`)
+### Example 1: Anticipatory Harm Avoidance (`affect_memory_demo.py`)
 
-Demonstrates **a reduced** emotion architecture **without episodic memory**.
-It proves **graceful degradation** under memory failure.
+**This is the primary demonstration: a complete implementation of the A1-A8 emotion-like control architecture that respects constraints R1-R4, serving as a separation witness for research question Q1.**
+
+- Agents explore a 2D world with a harm zone (y > 0) that delivers "electric shock"
+- Shock causes strong negative affect, but only upon contact (no warning signal)
+- **Without memory**: Agents rely on reactive responses, frequently entering harm zone
+- **With memory**: Agents recall negative affect upon approach from similar past situations, triggering avoidance *before* crossing into harm
+
+**Separation Witness Status:**
+This implementation demonstrates that emotion-like control (A1-A8) can be realized while satisfying the risk-reduction constraints:
+- **R1 (No shared workspace)**: Memory returns only aggregate hints and affect; no global broadcast
+- **R2 (No metarepresentation)**: All stored quantities are first-order (categories, affect, hints); no self-descriptive tokens
+- **R3 (No autobiographical consolidation)**: Episodes are atomic single-step records; no cross-episode summaries or narrative binding
+- **R4 (Bounded learning)**: H matrices are fixed; credit assignment stays within module boundaries
+
+**Key mechanism:**
+- Category (c) is **coarse** for memory retrieval (y-bands spanning the boundary)
+- Affect (z) is computed from **raw** sensory state (actual y position: shock only when "touching")
+- An agent at y = -1 (safe, no shock) retrieves memories from y = +1 (shocked, same band)
+- This provides **anticipatory warning** that immediate perception alone cannot provide
+
+**Algorithm structure:**
+```
+A1: Observe and categorize → (c_t, y_t) from x_t
+A2: Assess needs → z^need_t, h^need_t  
+A3: Retrieve episodic memory → z^mem_t, h^mem_t, reliability
+A4: Fuse affect and hints → z_t, h_t, q(π)
+A5: Instantiate policy → action scores s_t(u)
+A6-A7: Execute and reappraise → z*_t, succ*_t
+A8: Store episode (only if |succ*| ≥ threshold)
+```
+
+**Normalization strategy:**
+- H_need and H_affect matrices are row-L1 normalized so hints remain bounded in [-1, 1]
+- Hint fusion weights are renormalized to sum to 1 at each step
+- Memory retrieval uses `h_mem = Σ w_j * succ_j * h_j` (success magnitude scales hint strength linearly)
+- Success is computed from need-based affect (z^need, z*^need)
+
+**Credit assignment:**
+One-hot policy tagging isolates credit to the responsible policy. The "responsible policy" is identified as π_hat = argmax_π [q(π) * s̃_π(u_t)], and only that policy's one-hot tag is stored.
+
+**Category design:**
+```
+c_t = [y_band one-hot, sign(v_y) one-hot, harm_flag one-hot]
+```
+This expanded representation reduces spurious cosine-similarity ties that would otherwise make K=1 retrieval unreliable.
+
+**Expected results:**
+- Early crossings: Similar for both conditions (learning period)
+- Late crossings: ~0 with memory vs. continued crossings without memory
+- Late crossing reduction: 80-100%
+
+---
+
+### Example 2: Social Flocking (`flock_no_memory.py`)
+
+Demonstrates **graceful degradation** of the architecture when episodic memory is unavailable.
+
+**Note:** This is a reduced architecture with A3, A7, A8 disabled. It does *not* constitute full emotion-like control as defined in the paper (which requires dual-source integration of needs and episodic memory). Rather, it tests whether the need-based pathway alone provides useful reactive control when memory systems fail or are deliberately disabled.
 
 - Agents navigate a 2D world with social needs (affiliation, safety, motion, coherence)
 - Emotional signals (valence, arousal, drives) emerge from need satisfaction/frustration
 - Policies include Seek, Avoid, Align, and Cruise
-- Agents exhibit **emergent flocking behavior** driven purely by affect
+- Agents exhibit **emergent flocking behavior** driven purely by reactive affect
 
 **Key insight for flocking:**
 Heading coherence is treated as a *need*, not just a mechanical rule. When an agent's heading differs from neighbors, it experiences discomfort ("out of sync"), which drives the Align policy. This is biologically plausible—social animals experience discomfort when not coordinating with the group.
 
 **Conventions:**
-- **Drives** follow the convention: $d_i = \tanh(\alpha_i \times (n^\diamond_i - n_i))$, where positive drive indicates deficit ("want more") and negative drive indicates surplus
-- **Valence** follows standard psychological convention: $v_i = -d_i$, where positive valence means feeling good (need satisfied) and negative valence means feeling bad
+- **Drives** follow the convention: `d_i = tanh(α_i × (n◇_i - n_i))`, where positive drive indicates deficit ("want more") and negative drive indicates surplus
+- **Valence** follows standard psychological convention: `v_i = -d_i`, where positive valence means feeling good (need satisfied) and negative valence means feeling bad
 - **Arousal** increases with absolute drive magnitude (distance from target in either direction)
 
 **Simplifications in this baseline:**
 - Speed is constant (heading is the only control variable)
-- Action-selection temperature $\tau_2(a) \equiv \text{const}$ (not arousal-dependent)
+- Action-selection temperature τ₂(a) ≡ const (not arousal-dependent)
 - Episodic memory is disabled (A3, A7, A8 skipped)
 
 **Affective attractor:**
-When the flock reaches stable coordinated motion, the affect-space trajectory (valence vs. arousal) converges to a one-dimensional curve. This occurs because flock geometry cannot simultaneously satisfy all need targets perfectly—agents in a tight flock experience mild affiliation surplus, creating residual drive variation. This "affective attractor" represents the characteristic emotional signature of stable flocking: mild positive valence, moderate arousal.
+When the flock reaches stable coordinated motion, the affect-space trajectory (valence vs. arousal) converges to a one-dimensional curve. This "affective attractor" represents the characteristic emotional signature of stable flocking: mild positive valence, moderate arousal.
 
 **Algorithm mapping:**
 - A1 (Categorize): `categorize()` → density, crowding, coherence, motion
@@ -56,43 +112,19 @@ When the flock reaches stable coordinated motion, the affect-space trajectory (v
 - A7 (Reappraisal): Skipped (graceful degradation test)
 - A8 (Store episode): Skipped (graceful degradation test)
 
-### Example 2: Anticipatory Harm Avoidance (`affect_memory_demo.py`)
-
-Demonstrates **the complete** emotion architecture **with episodic memory** (a genuine **separation witness for Q1**)
-
-- Agents explore a 2D world with a harm zone (y > 0) that delivers "electric shock"
-- Shock causes strong negative affect, but only upon contact (no warning signal)
-- **Without memory**: Agents rely on reactive responses, frequently entering harm zone
-- **With memory**: Agents recall negative affect from similar past situations, triggering avoidance *before* crossing into harm
-
-**Key mechanism:**
-- Category (c) is **coarse** for memory retrieval (y-bands spanning the boundary)
-- Affect (z) is computed from **raw** sensory state (actual y position)
-- An agent at y = -1 (safe, no shock) retrieves memories from y = +1 (shocked, same band)
-- This provides **anticipatory warning** that immediate perception alone cannot provide
-
-**Algorithm structure:**
-```
-A1: Observe and categorize → (c, y) from x
-A2: Assess needs → z_need, h_need  
-A3: Retrieve episodic memory → z_mem, h_mem (K=1 retrieval)
-A4: Fuse affect and hints → z, h, q(π)
-A5: Instantiate policy → action scores
-A6-A7: Execute and reappraise → z*, succ*
-A8: Store episode (only if |succ*| > threshold)
-```
-
-**Memory depth and R3 compliance:**
-Agents typically saturate at memories containing only *two* salient episodes: one encoding negative affect upon entering harm, the other encoding positive affect upon escaping. This shallow memory depth provides strong evidence for R3 (no autobiographical consolidation) compliance: the architecture achieves genuine anticipatory behavior while storing far too few episodes for meaningful temporal integration or autobiographical binding. What persists in memory are primitive affect tags for separate episodes  ("it felt bad there," "it felt good leaving"), not narrative structure.
-
-**Expected results:**
-- Early crossings: Similar for both conditions (learning period)
-- Late crossings: ~0 with memory vs. continued crossings without memory
-- Late crossing reduction: ~100%
-
 ## Running the Examples
 
-### Example 1: Flocking
+### Example 1: Affect Memory Demo (Separation Witness)
+```bash
+python affect_memory_demo.py
+```
+
+Outputs (in `outputs/` directory):
+- `harm-comparison.png` - Comparison plots (crossings, memory size, mean Y position)
+- `harm-no_memory.mp4` - Animation without memory
+- `harm-with_memory.mp4` - Animation with memory
+
+### Example 2: Flocking (Graceful Degradation)
 ```bash
 python flock_no_memory.py
 ```
@@ -103,19 +135,28 @@ Outputs (in `outputs/` directory):
 - `flock_metrics.png` - Alignment, cohesion, valence, arousal, affect trajectory, policy mix
 - `flock_animation.mp4` - Animation of flock formation
 
-### Example 2: Affect Memory Demo
-```bash
-python affect_memory_demo.py
-```
-
-Outputs (in `outputs/` directory):
-- `harm-algorithm_comparison.png` - Comparison plots (crossings, memory size, etc.)
-- `harm-no_memory.mp4` - Animation without memory
-- `harm-with_memory.mp4` - Animation with memory
-
 ## Configuration
 
-### Flocking Example
+### Example 1: Affect Memory Demo
+
+Key parameters in `DEFAULT_CONFIG` dictionary:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `num_agents` | Number of agents | 30 |
+| `num_y_bands` | Categorical bands for memory retrieval | 6 |
+| `memory_retrieval_k` | Number of episodes retrieved (k-NN) | 1 |
+| `memory_store_threshold` | Only store episodes with \|succ*\| ≥ threshold | 0.25 |
+| `alpha_hint_need` | Weight for need-based hints | 0.30 |
+| `alpha_hint_memory` | Weight for memory-based hints | 0.60 |
+| `alpha_hint_affect` | Weight for affect-based hints | 0.40 |
+| `beta_affect_fusion` | Base weight for need affect in fusion | 0.40 |
+| `success_mode` | Success measure: "drive", "emotion", or "hybrid" | "hybrid" |
+| `success_omega` | Blend factor for hybrid success | 0.50 |
+| `success_weight_safety` | Weight for safety channel in hedonic success | 4.0 |
+| `success_weight_motion` | Weight for motion channel in hedonic success | 1.0 |
+
+### Example 2: Flocking
 
 Key parameters in `cfg` dictionary:
 
@@ -133,61 +174,42 @@ Key parameters in `cfg` dictionary:
 | `R_comfort` | Comfortable neighbor distance | 7.0 |
 | `R_too_close` | Personal space radius | 2.0 |
 
-### Affect Memory Example
-
-Key parameters:
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `num_agents` | Number of agents | 30 |
-| `n_y_bands` | Categorical bands for memory retrieval | 5 |
-| `memory_K` | Number of episodes retrieved (k-NN) | 1 |
-| `store_threshold` | Only store episodes with \|succ*\| > threshold | 0.4 |
-| `alpha_mem` | Weight for memory-based hints | 0.85 |
-| `alpha_z_mem` | Weight for memory affect fusion | 0.9 |
-| `harm_intensity` | Strength of negative affect in harm zone | 0.95 |
-
 ## Design Notes
 
-### Flocking: Graceful Degradation
+### Separation Witness: Full A1-A8 Implementation
 
-The flocking example demonstrates that the architecture remains functional when episodic memory is unavailable. This is a test of *graceful degradation*, not full emotion-like control. The paper's architectural definition (A1-A8) requires dual-source integration: both need-based appraisal *and* episodic affective memory working together.
+The `affect_memory_demo.py` implements the complete emotion-like control loop as specified in the paper:
+- **Dual-source integration**: Both need-based appraisal (A2) and episodic memory (A3) contribute to policy selection
+- **Bounded interfaces**: Memory returns only aggregate quantities; no raw episodes cross module boundaries
+- **First-order representations**: All stored quantities describe situations and outcomes, not self-states
+- **Single-step atomicity**: Episodes encode one action-outcome pair; no temporal binding across steps
+
+### Graceful Degradation: Reduced Architecture
+
+The `flock_no_memory.py` demonstrates that the need-based pathway alone provides useful reactive control when episodic memory is unavailable. This robustness property may be valuable in deployments where memory systems could fail.
 
 ### Policy-to-Action Mappings
 
-The present algorithm learns *when* to activate policies (anticipatory triggering) but not *how* to execute them. Policy-to-action mappings are assumed innate. For example:
+The present algorithm learns *when* to activate policies (anticipatory triggering) but not *how* to execute them. Policy-to-action mappings are assumed innate:
+- **Harm avoidance**: Flee policy accelerates south (innate safe direction); Thrust policy maintains current velocity
+- **Flocking**: Align policy scores headings by angular proximity to neighbor consensus
 
-- **Flocking**: The Align policy template scores headings by angular proximity to neighbor consensus
-- **Harm avoidance**: The Flee policy directs agents toward a predetermined safe region
+Learning effective policy-to-action mappings would require extended temporal windows for credit assignment—left for future work.
 
-Learning effective policy-to-action mappings would require extended temporal windows for credit assignment, linking specific actions to delayed outcomes—left for future work.
+### Episode Storage Strategy
 
-### Episode Length and Temporal Credit Assignment
+Episodes are only stored when outcomes are significant (|succ*| ≥ threshold). This prevents memory dilution from neutral experiences while ensuring that both positive and negative outcomes contribute to learning.
 
-Episodes are kept to the minimum temporal size of a single step. This choice is intertwined with the innate policy-to-action assumption: with single-step episodes, an agent can learn *when* to activate a flee policy, but not *where* fleeing should lead. The latter would require persistence across multiple steps plus subsequent credit assignment.
+### k-NN Safety for Any K
 
-### Separation Witness: Selective Episode Storage
-
-Episodes are only stored for highly successful or unsuccessful outcomes (|succ*| > threshold). This prevents memory from being swamped by neutral episodes that would dilute the signal from significant experiences.
-
-### Flocking: Coherence Measurement
-
-The coherence category measures agent-to-neighbor heading mismatch directly: $c_{\text{coherence}} = (1 + \cos\Delta)/2$ where $\Delta$ is the angular difference between the agent's heading and the mean neighbor heading. This ensures that an agent pointing the "wrong way" relative to its neighbors feels appropriately "out of sync," even if the neighbors themselves are well-aligned.
-
-### Flocking: Heading Persistence
-
-Both examples include optional heading persistence (smoothing/inertia) that prefers smooth movement trajectories. This is mechanical (like physical momentum), not memory-based, and does not constitute autobiographical temporal binding.
-
-### Separation Witness: k-NN Safety for Any K
-
-While the implementation uses K=1 to ensure full compliance with the Q1 argument of the main text, the k-NN formulation in Steps 6-8 of the algorithm would remain R1-R4 compliant for any K even if performed inside the controller: weighted averaging of affect and hints of similar episodes (with $\mathbf{c}_i \approx \mathbf{c}_j$) does not create cross-episode summaries.
+While the implementation uses K=1, the k-NN formulation would remain R1-R4 compliant for any K: weighted averaging of affect and hints from similar episodes does not create cross-episode summaries or autobiographical binding.
 
 ## Citation
 
 If you use this repository, please cite:
 ```bibtex
 @article{author2026synthetic,
-  title={{Synthetic {E}motions and {C}onsciousness: {E}xploring {A}rchitectural {B}oundaries}},
+  title={{Synthetic Emotions and Consciousness: Exploring Architectural Boundaries}},
   author={name},
   journal={AI \& Society},
   year={2026},
