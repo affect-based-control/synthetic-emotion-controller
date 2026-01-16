@@ -118,9 +118,9 @@ Usage:
     python affect_memory_demo.py
 
 Outputs:
-    - outputs/harm-comparison.png: Side-by-side metrics
-    - outputs/harm-no_memory.mp4: Animation without episodic memory
-    - outputs/harm-with_memory.mp4: Animation with episodic memory
+    - outputs/comparison.png: Side-by-side metrics
+    - outputs/no_memory.mp4: Animation without episodic memory
+    - outputs/with_memory.mp4: Animation with episodic memory
 
 Reference:
     "Synthetic Emotions and Consciousness: Exploring Architectural Boundaries"
@@ -293,7 +293,7 @@ DEFAULT_CONFIG: Dict = {
 
     # Episodic memory
     "memory_capacity": 100,
-    "memory_retrieval_k": 1,              # user wants K=1
+    "memory_retrieval_k": 1,              # K=1 (can be set to K>1)
     "memory_retrieval_temperature": 0.25, # softmax temperature over similarities (lower => more peaked)
     "memory_tag_alpha": 0.15,             # affect tag blend between (z_t) and (z*_t)
     "memory_store_threshold": 0.25,       # store if |succ*| >= threshold
@@ -369,7 +369,7 @@ def affect_from_needs(
 
 
 # ============================================================================
-# SUCCESS MEASURES (as in user's SI excerpt)
+# SUCCESS MEASURES
 # ============================================================================
 
 def success_drive_reduction(d_pre: np.ndarray, d_post: np.ndarray, eps: float = 1e-6) -> float:
@@ -1206,4 +1206,3 @@ if __name__ == "__main__":
     results = run_experiment(cfg, seeds, num_steps=2500)
     print_summary(results)
     print("\nDone!")
-
