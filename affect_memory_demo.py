@@ -118,9 +118,9 @@ Usage:
     python affect_memory_demo.py
 
 Outputs:
-    - outputs/comparison.png: Side-by-side metrics
-    - outputs/no_memory.mp4: Animation without episodic memory
-    - outputs/with_memory.mp4: Animation with episodic memory
+    - outputs/harm-comparison.png: Side-by-side metrics
+    - outputs/harm-no_memory.mp4: Animation without episodic memory
+    - outputs/harm-with_memory.mp4: Animation with episodic memory
 
 Reference:
     "Synthetic Emotions and Consciousness: Exploring Architectural Boundaries"
@@ -1206,3 +1206,4 @@ if __name__ == "__main__":
     results = run_experiment(cfg, seeds, num_steps=2500)
     print_summary(results)
     print("\nDone!")
+
