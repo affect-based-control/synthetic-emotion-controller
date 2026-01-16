@@ -1114,7 +1114,7 @@ def plot_comparison(w_mem: World, w_no: World, filepath: str = None) -> None:
     ax.plot(w_mem.history["mean_y"], "b-", label="With Memory", alpha=0.7)
     ax.axhline(y=0, color="k", linestyle="--", alpha=0.5)
     ax.set_xlabel("Step"); ax.set_ylabel("Mean Y")
-    ax.set_title("Vertical Position"); ax.legend(); ax.grid(True, alpha=0.3)
+    ax.set_title("Mean Vertical Position"); ax.legend(); ax.grid(True, alpha=0.3)
 
     ax = axes[1, 0]
     ax.plot(w_mem.history["mean_episodes"], "b-", lw=2)
@@ -1132,7 +1132,7 @@ def plot_comparison(w_mem: World, w_no: World, filepath: str = None) -> None:
     ax.bar([p+0.175 for p in x], [early_mem, late_mem], 0.35, label="With Memory", color="blue", alpha=0.7)
     ax.set_xticks(x); ax.set_xticklabels(["Early", "Late"])
     ax.set_ylabel("Crossings")
-    ax.set_title(f"Early vs Late\nNo:{early_no}→{late_no}  Mem:{early_mem}→{late_mem}")
+    ax.set_title(f"Early Steps (0-10%) vs Late (90-100%)\nNo:{early_no}→{late_no}  Mem:{early_mem}→{late_mem}")
     ax.legend(); ax.grid(True, alpha=0.3, axis="y")
 
     plt.suptitle("Affect-Based Episodic Memory: A1-A8", fontsize=13)
@@ -1206,3 +1206,4 @@ if __name__ == "__main__":
     results = run_experiment(cfg, seeds, num_steps=2500)
     print_summary(results)
     print("\nDone!")
+
