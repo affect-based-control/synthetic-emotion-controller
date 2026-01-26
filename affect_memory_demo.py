@@ -4,7 +4,7 @@
 AFFECT-BASED EPISODIC MEMORY FOR ANTICIPATORY BEHAVIOR
 ================================================================================
 
-Copyright (c) 2026
+Copyright (c) 2026 Hermann Borotschnig
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -2124,3 +2124,4 @@ if __name__ == "__main__":
     print_summary(results)
     
     print("\nDone!")
+
