@@ -2,9 +2,9 @@
 
 Implementation of an affect-based control architecture for autonomous agents, as described in:
 
-> **Synthetic Emotions and Consciousness: Exploring Architectural Boundaries**  
-> Hermann Borotschnig  (2026) AI & Society, Springer Nature, 
-> DOI: 10.1007/s00146-026-02896-z
+> Hermann Borotschnig (2026) *Synthetic Emotions and Consciousness: Exploring Architectural Boundaries* \
+> AI & Society, Springer Nature, 
+> [DOI: 10.1007/s00146-026-02896-z](https://dx.doi.org/10.1007/s00146-026-02896-z)
 
 This repository demonstrates how emotion-like mechanisms can guide adaptive behavior, with examples showing both the complete emotion-like control architecture (A1-A8) and graceful degradation under memory failure.
 
