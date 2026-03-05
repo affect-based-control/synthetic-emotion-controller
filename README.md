@@ -223,12 +223,11 @@ While the implementation uses K=1, the k-NN formulation would remain R1-R4 compl
 If you use this repository, please cite:
 ```bibtex
 @article{borotschnig2026synthetic,
-  title={{Synthetic Emotions and Consciousness: Exploring Architectural Boundaries}},
-  author={Borotschnig, Hermann},
-  journal={AI \& Society},
-  year={2026},
-  doi={10.1007/s00146-026-02896-z},
-  publisher={Springer Nature}
+  author  = {Borotschnig, Hermann},
+  title   = {Synthetic emotions and consciousness: exploring architectural boundaries},
+  journal = {AI \& Society},
+  year    = {2026},
+  doi     = {10.1007/s00146-026-02896-z}
 }
 ```
 
