@@ -4,9 +4,19 @@ Implementation of an affect-based control architecture for autonomous agents, as
 
 > Hermann Borotschnig (2026) *Synthetic Emotions and Consciousness: Exploring Architectural Boundaries* \
 > AI & Society, Springer Nature, 
-> [DOI: 10.1007/s00146-026-02896-z](https://dx.doi.org/10.1007/s00146-026-02896-z)
+> [DOI: 10.1007/s00146-026-02896-z](https://doi.org/10.1007/s00146-026-02896-z)
 
 This repository demonstrates how emotion-like mechanisms can guide adaptive behavior, with examples showing both the complete emotion-like control architecture (A1-A8) and graceful degradation under memory failure.
+
+## Companion Essay
+
+A non-technical companion essay, **_Fear With No One to Feel It?_**, is available open access on PhilArchive:
+
+> [philarchive.org/rec/BORFWN](https://philarchive.org/rec/BORFWN)
+
+The essay lays out the conceptual argument behind this work — why emotion understood as control and the architecture of awareness might come apart, why such a separation can be *exhibited* while feeling itself is never *detected*, and how the same construction serves as a theory-agnostic template. It is written for an interdisciplinary audience (computer science, neuroscience, philosophy of mind) and requires no background in the formal paper.
+
+Suggested reading order: the **companion essay** for the ideas and motivation, the **[paper](https://doi.org/10.1007/s00146-026-02896-z)** for the formal argument and full qualifications, and **this repository** for the runnable separation witness (`affect_memory_demo.py`).
 
 ## Overview
 
@@ -222,7 +232,7 @@ While the implementation uses K=1, the k-NN formulation would remain R1-R4 compl
 
 If you use this repository, please cite:
 ```bibtex
-@article{borotschnig2026synthetic,
+@article{Borotschnig2026SyntheticEmotions,
   author  = {Borotschnig, Hermann},
   title   = {Synthetic emotions and consciousness: exploring architectural boundaries},
   journal = {AI \& Society},
